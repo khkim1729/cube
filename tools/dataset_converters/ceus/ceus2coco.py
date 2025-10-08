@@ -18,7 +18,7 @@ from typing import List, Dict, Any
 # ===========================================================
 #                🔧 CONFIG 전역 변수 설정
 # ===========================================================
-DATA_ROOT      = "data/CEUS"                   # CEUS 데이터 루트
+DATA_ROOT      = "/home/introai21/mmtracking/data/CEUS"                   # CEUS 데이터 루트
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
 
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")

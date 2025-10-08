@@ -1,78 +1,8 @@
-<div align="center">
-  <img src="resources/mmtrack-logo.png" width="600"/>
-  <div>&nbsp;</div>
-  <div align="center">
-    <b><font size="5">OpenMMLab website</font></b>
-    <sup>
-      <a href="https://openmmlab.com">
-        <i><font size="4">HOT</font></i>
-      </a>
-    </sup>
-    &nbsp;&nbsp;&nbsp;&nbsp;
-    <b><font size="5">OpenMMLab platform</font></b>
-    <sup>
-      <a href="https://platform.openmmlab.com">
-        <i><font size="4">TRY IT OUT</font></i>
-      </a>
-    </sup>
-  </div>
-  <div>&nbsp;</div>
-
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/mmtrack)](https://pypi.org/project/mmtrack/)
-[![PyPI](https://img.shields.io/pypi/v/mmtrack)](https://pypi.org/project/mmtrack)
-[![docs](https://img.shields.io/badge/docs-1.x-blue)](https://mmtracking.readthedocs.io/en/1.x/)
-[![badge](https://github.com/open-mmlab/mmtracking/workflows/build/badge.svg)](https://github.com/open-mmlab/mmtracking/actions)
-[![codecov](https://codecov.io/gh/open-mmlab/mmtracking/branch/master/graph/badge.svg)](https://codecov.io/gh/open-mmlab/mmtracking)
-[![license](https://img.shields.io/github/license/open-mmlab/mmtracking.svg)](https://github.com/open-mmlab/mmtracking/blob/master/LICENSE)
-
-[📘Documentation](https://mmtracking.readthedocs.io/en/1.x/) |
-[🛠️Installation](https://mmtracking.readthedocs.io/en/1.x/get_started.html) |
-[👀Model Zoo](https://mmtracking.readthedocs.io/en/1.x/model_zoo.html) |
-[🆕Update News](https://mmtracking.readthedocs.io/en/1.x/notes/changelog.html) |
-[🤔Reporting Issues](https://github.com/open-mmlab/mmtracking/issues/new/choose)
-
-</div>
-
-<div align="center">
-
-English | [简体中文](README_zh-CN.md)
-
-</div>
-
 ## Introduction
 
 MMTracking is an open source video perception toolbox by PyTorch. It is a part of [OpenMMLab](https://openmmlab.com) project.
 
 The master branch works with **PyTorch1.6+**.
-
-<div align="center">
-  <img src="https://user-images.githubusercontent.com/24663779/103343312-c724f480-4ac6-11eb-9c22-b56f1902584e.gif" width="800"/>
-</div>
-
-### Major features
-
-- **The First Unified Video Perception Platform**
-
-  We are the first open source toolbox that unifies versatile video perception tasks include video object detection, multiple object tracking, single object tracking and video instance segmentation.
-
-- **Modular Design**
-
-  We decompose the video perception framework into different components and one can easily construct a customized method by combining different modules.
-
-- **Simple, Fast and Strong**
-
-  **Simple**: MMTracking interacts with other OpenMMLab projects. It is built upon [MMDetection](https://github.com/open-mmlab/mmdetection/tree/3.x) that we can capitalize any detector only through modifying the configs.
-
-  **Fast**: All operations run on GPUs. The training and inference speeds are faster than or comparable to other implementations.
-
-  **Strong**: We reproduce state-of-the-art models and some of them even outperform the official implementations.
-
-## What's New
-
-Release [Mask2Former](configs/vis/mask2former), [PrDiMP](configs/sot/prdimp) and [StrongSORT++](configs/mot/strongsort)) pretrained models.
-
-v1.0.0rc1 was released in 10/10/2022.
-Please refer to [changelog.md](docs/en/notes/changelog.md) for details and release history.
 
 ## Get Started
 
@@ -148,53 +78,41 @@ Supported Datasets
 - [x] [GOT10k](http://got-10k.aitestunion.com/)
 - [x] [VOT2018](https://www.votchallenge.net/vot2018/)
 
-## Contributing
-
-We appreciate all contributions to improve MMTracking. Please refer to [CONTRIBUTING.md](https://github.com/open-mmlab/mmcv/blob/master/CONTRIBUTING.md) for the contributing guideline and [this discussion](https://github.com/open-mmlab/mmtracking/issues/73) for development roadmap.
-
-## Acknowledgement
-
-MMTracking is an open source project that welcome any contribution and feedback.
-We wish that the toolbox and benchmark could serve the growing research
-community by providing a flexible as well as standardized toolkit to reimplement existing methods
-and develop their own new video perception methods.
-
-## Citation
-
-If you find this project useful in your research, please consider cite:
-
-```latex
-@misc{mmtrack2020,
-    title={{MMTracking: OpenMMLab} video perception toolbox and benchmark},
-    author={MMTracking Contributors},
-    howpublished = {\url{https://github.com/open-mmlab/mmtracking}},
-    year={2020}
-}
+## For CEUS
+### 1. data 폴더 만들기
+- mmtracking 바로 밑에 data 라는 폴더를 만들어줘야 함.
 ```
+mmtracking/
+├── data/
+│   └── CEUS/
+│       ├── annotations/
+│       │
+│       ├── Annotations/
+│       │   ├── post_padding.json
+│       │   ├── post_padding_aug.json
+│       │   ├── pre_padding.json
+│       │   ├── pre_padding_aug.json
+│       │   ├── rand_padding.json
+│       │   └── rand_padding_aug.json
+│       │
+│       └── Data/
+│           ├── fold_0/
+│           ├── fold_1/
+│           ├── fold_2/
+│           ├── fold_3/
+│           └── fold_4/
+```
+### 2. COCOVID json
+- 우리 json을 cocovid json 형식으로 바꿔줘야함.
+- 이를 위해 tools/dataset_converters/ceus/ceus2coco.py를 실행한다. 이때, 전역변수에 있는 경로는 꼭 맞춰주기!
+  - annotations 아래에 ceus_train.json과 ceus_val.json 이 생긴 것을 확인할 수 있다.
+- 이후 tools/dataset_converters/ceus/fill_blank.py를 실행해서, blank.png를 만들어주자. 역시 경로 맞춰주고 실행.
 
-## License
 
-This project is released under the [Apache 2.0 license](LICENSE).
+### 3. Configs
+- vid/dff: 이 디렉토리 내부가 최종 config. train 돌릴 때 이 경로를 넣어주면 된다.
+- config 이름 형식: {모델}_{백본}_{GPU 갯수 및 batch 갯수 (ex. GPU 1개, 배치 1: 1xb1)}-{epoch 수}_{데이터셋}.py
 
-## Projects in OpenMMLab
-
-- [MMEngine](https://github.com/open-mmlab/mmengine): OpenMMLab foundational library for training deep learning models.
-- [MMCV](https://github.com/open-mmlab/mmcv): OpenMMLab foundational library for computer vision.
-- [MIM](https://github.com/open-mmlab/mim): MIM installs OpenMMLab packages.
-- [MMClassification](https://github.com/open-mmlab/mmclassification): OpenMMLab image classification toolbox and benchmark.
-- [MMDetection](https://github.com/open-mmlab/mmdetection): OpenMMLab detection toolbox and benchmark.
-- [MMDetection3D](https://github.com/open-mmlab/mmdetection3d): OpenMMLab's next-generation platform for general 3D object detection.
-- [MMRotate](https://github.com/open-mmlab/mmrotate): OpenMMLab rotated object detection toolbox and benchmark.
-- [MMSegmentation](https://github.com/open-mmlab/mmsegmentation): OpenMMLab semantic segmentation toolbox and benchmark.
-- [MMOCR](https://github.com/open-mmlab/mmocr): OpenMMLab text detection, recognition and understanding toolbox.
-- [MMPose](https://github.com/open-mmlab/mmpose): OpenMMLab pose estimation toolbox and benchmark.
-- [MMHuman3D](https://github.com/open-mmlab/mmhuman3d): OpenMMLab 3D human parametric model toolbox and benchmark.
-- [MMSelfSup](https://github.com/open-mmlab/mmselfsup): OpenMMLab self-supervised learning Toolbox and Benchmark.
-- [MMRazor](https://github.com/open-mmlab/mmrazor): OpenMMLab Model Compression Toolbox and Benchmark.
-- [MMFewShot](https://github.com/open-mmlab/mmfewshot): OpenMMLab FewShot Learning Toolbox and Benchmark.
-- [MMAction2](https://github.com/open-mmlab/mmaction2): OpenMMLab's next-generation action understanding toolbox and benchmark.
-- [MMTracking](https://github.com/open-mmlab/mmtracking): OpenMMLab video perception toolbox and benchmark.
-- [MMFlow](https://github.com/open-mmlab/mmflow): OpenMMLab optical flow toolbox and benchmark.
-- [MMEditing](https://github.com/open-mmlab/mmediting): OpenMMLab image and video editing toolbox.
-- [MMGeneration](https://github.com/open-mmlab/mmgeneration):  OpenMMLab Generative Model toolbox and benchmark.
-- [MMDeploy](https://github.com/open-mmlab/mmdeploy): OpenMMlab deep learning model deployment toolset.
+### 4. Train 돌리기
+- python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_example
+- config, 결과 저장 경로 차례로 넣어주면 된다. results/dff_example 과 같이 결과 저장 폴더 내부에 실험 제목 폴더 하나 더 만들어야 안섞임.

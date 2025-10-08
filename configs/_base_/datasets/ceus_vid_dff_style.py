@@ -10,12 +10,14 @@ train_pipeline = [
         transforms=[
             dict(type='LoadImageFromFile'),
             dict(type='LoadTrackAnnotations', with_instance_id=True),
+            dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=False),
         ]),
     dict(type='PackTrackInputs')
 ]
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
+    dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=False),
     dict(type='PackTrackInputs', pack_single_img=True)
 ]
 
