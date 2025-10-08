@@ -14,11 +14,15 @@ train_pipeline = [
         ]),
     dict(type='PackTrackInputs')
 ]
-
 test_pipeline = [
-    dict(type='LoadImageFromFile'),
-    dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=False),
-    dict(type='PackTrackInputs', pack_single_img=True)
+    dict(
+        type='TransformBroadcaster',
+        share_random_params=True,
+        transforms=[
+            dict(type='LoadImageFromFile'),
+            dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=False),
+        ]),
+    dict(type='PackTrackInputs', pack_single_img=False)
 ]
 
 # dataloader
@@ -27,7 +31,6 @@ train_dataloader = dict(
     num_workers=2,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
-    # CEUS는 고정 크기이므로 AspectRatioBatchSampler 불필요
     dataset=dict(
         type=dataset_type,                  
         data_root=data_root,
@@ -38,10 +41,10 @@ train_dataloader = dict(
         load_as_video=True,
         key_img_sampler=dict(interval=1),       # CEUS: 모든 프레임을 key로 사용
         ref_img_sampler=dict(
-            num_ref_imgs=1,
-            frame_range=[-1, 0],
+            num_ref_imgs=15,
+            frame_range=[-15, 15],
             filter_key_img=True,
-            method='uniform'
+            method='all_inclusive'
         ),
     ),
 )
@@ -59,8 +62,13 @@ val_dataloader = dict(
         data_prefix=dict(img_path='Data'),
         pipeline=test_pipeline,
         load_as_video=True,
-        ref_img_sampler=None,
-        test_mode=True,
+        ref_img_sampler=dict(
+            num_ref_imgs=15,
+            frame_range=[-15, 15],
+            filter_key_img=True,
+            method='all_inclusive'
+        ),
+        test_mode=True
     ),
 )
 
