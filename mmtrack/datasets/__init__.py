@@ -17,6 +17,7 @@ from .trackingnet_dataset import TrackingNetDataset
 from .uav123_dataset import UAV123Dataset
 from .vot_dataset import VOTDataset
 from .youtube_vis_dataset import YouTubeVISDataset
+from .ceus_vid_dataset import CeusVIDDataset
 
 __all__ = [
     'BaseVideoDataset', 'MOTChallengeDataset', 'BaseSOTDataset',
@@ -24,5 +25,6 @@ __all__ = [
     'SOTImageNetVIDDataset', 'TrackingNetDataset', 'YouTubeVISDataset',
     'ImagenetVIDDataset', 'RandomSampleConcatDataset', 'TaoDataset',
     'UAV123Dataset', 'VOTDataset', 'OTB100Dataset', 'DanceTrackDataset',
-    'VideoSampler', 'QuotaSampler', 'EntireVideoBatchSampler'
+    'VideoSampler', 'QuotaSampler', 'EntireVideoBatchSampler',
+    'CeusVIDDataset'
 ]
