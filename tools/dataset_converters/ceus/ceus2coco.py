@@ -1,23 +1,8 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-CEUS meta(JSON) → CocoVID 변환기 (config 전역변수 버전)
-
-- 5-fold (3:1:1 스플릿)
-- test_fold, val_fold를 전역 설정에서 지정
-- train = 나머지 3개 fold
-- 출력: ceus_train.json / ceus_val.json
-
-작성자: ChatGPT (2025-10)
-"""
-
 import os, json
 from ast import literal_eval
 from typing import List, Dict, Any
 
-# ===========================================================
-#                🔧 CONFIG 전역 변수 설정
-# ===========================================================
+# CONFIG 전역 변수 설정
 DATA_ROOT      = "/home/introai21/mmtracking/data/CEUS"                   # CEUS 데이터 루트
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
 
@@ -30,15 +15,11 @@ IMG_H, IMG_W   = 512, 512
 ORG_DIRNAME    = "org"
 AUG_DIRNAME    = "aug"
 
-# ===========================================================
-#                📋 카테고리 정의
-# ===========================================================
+# 카테고리 정의
 CATEGORIES = [{"id": 1, "name": "FNH"}, {"id": 2, "name": "HCC"}]
 CAT2ID = {"FNH": 1, "HCC": 2}
 
-# ===========================================================
-#                ⚙️ 유틸 함수
-# ===========================================================
+# 유틸 함수
 def load_meta(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         obj = json.load(f)
@@ -47,9 +28,7 @@ def load_meta(path: str) -> List[Dict[str, Any]]:
 def is_blank(fname: str) -> bool:
     return fname.lower() == "blank.png"
 
-# ===========================================================
-#                🧠 CEUS → CocoVID 변환 로직
-# ===========================================================
+# CEUS → CocoVID 변환 로직
 def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[str, Any]:
     videos, images, anns = [], [], []
     vid_id, img_id, ann_id, global_inst_id = 1, 1, 1, 1
@@ -126,11 +105,23 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
             img_id += 1
         vid_id += 1
 
-    return {"videos": videos, "images": images, "annotations": anns, "categories": CATEGORIES}
+    info_block = {
+        "description": "CEUS liver dataset",
+        "date_created": "2025-10-08",
+        "contributor": "SNU Medical AI Lab CEUS Team",
+        "version": "1.0"
+    }
 
-# ===========================================================
-#                🚀 메인 실행
-# ===========================================================
+    return {
+        "info": info_block,
+        "licenses": [],
+        "videos": videos,
+        "images": images,
+        "annotations": anns,
+        "categories": CATEGORIES
+    }
+
+# 메인 실행
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     meta_org = load_meta(META_ORG_PATH)

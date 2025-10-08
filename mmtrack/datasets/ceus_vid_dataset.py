@@ -15,7 +15,8 @@ class CeusVIDDataset(BaseVideoDataset):
     """CEUS CocoVID dataset (2 classes: FNH, HCC)."""
 
     METAINFO = {
-        'CLASSES': ('FNH', 'HCC')
+        'CLASSES': ('FNH', 'HCC'),
+        'classes': ('FNH', 'HCC'),
     }
 
     def __init__(self, *args, **kwargs):

@@ -1,4 +1,3 @@
-# dataset settings
 dataset_type = 'CeusVIDDataset'
 data_root = 'data/CEUS/'
 
