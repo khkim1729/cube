@@ -5,6 +5,19 @@ _base_ = [
 ]
 model = dict(
     type='FGFA',
+    detector=dict(
+        train_cfg=dict(
+            rpn_proposal=dict(max_per_img=300),
+            rcnn=dict(sampler=dict(num=256))),
+        test_cfg=dict(
+            rpn=dict(nms_pre=2000, max_per_img=400),
+            rcnn=dict(
+                score_thr=1e-4,
+                nms=dict(type='nms', iou_threshold=0.5),
+                max_per_img=1
+            )
+        )
+    ),
     motion=dict(
         type='FlowNetSimple',
         img_scale_factor=1.0,

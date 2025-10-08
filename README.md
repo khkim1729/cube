@@ -80,7 +80,10 @@ Supported Datasets
 
 ## For CEUS
 ### 1. data 폴더 만들기
-- mmtracking 바로 밑에 data 라는 폴더를 만들어줘야 함.
+- mmtracking 하위에 data/CEUS 폴더 생성
+- data/CEUS 내부에 annotations, Annotations, Data 폴더 생성
+- Annotations 내부에 json, Data 내부에 원본 데이터 넣기
+
 ```
 mmtracking/
 ├── data/
@@ -102,17 +105,39 @@ mmtracking/
 │           ├── fold_3/
 │           └── fold_4/
 ```
-### 2. COCOVID json
-- 우리 json을 cocovid json 형식으로 바꿔줘야함.
-- 이를 위해 tools/dataset_converters/ceus/ceus2coco.py를 실행한다. 이때, 전역변수에 있는 경로는 꼭 맞춰주기!
-  - annotations 아래에 ceus_train.json과 ceus_val.json 이 생긴 것을 확인할 수 있다.
-- 이후 tools/dataset_converters/ceus/fill_blank.py를 실행해서, blank.png를 만들어주자. 역시 경로 맞춰주고 실행.
 
+### 2. COCOVID json
+- json을 cocovid json 형식으로 수정
+- `tools/dataset_converters/ceus/ceus2coco.py` 실행 (전역변수 경로 수정) - annotations 폴더에 ceus_train.json, ceus_val.json 생성
+- `tools/dataset_converters/ceus/fill_blank.py` 실행 (전역변수 경로 수정) - blank.png 생성
 
 ### 3. Configs
-- vid/dff: 이 디렉토리 내부가 최종 config. train 돌릴 때 이 경로를 넣어주면 된다.
-- config 이름 형식: {모델}_{백본}_{GPU 갯수 및 batch 갯수 (ex. GPU 1개, 배치 1: 1xb1)}-{epoch 수}_{데이터셋}.py
+- configs/vid 폴더 내부에 모델 별로 config 분류
+- config 이름 형식: {모델}\_{백본}\_{GPU 갯수 및 batch 크기}-{epoch 수}\_{데이터셋}.py
+- ex. dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid
+  - 모델: dff
+  - 백본: faster-rcnn_r50-dc5
+  - GPU, batch: 1xb1 (GPU 1개, batch size 1)
+  - epoch: 10
+  - 데이터셋: ceusvid
 
 ### 4. Train 돌리기
-- python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_example
-- config, 결과 저장 경로 차례로 넣어주면 된다. results/dff_example 과 같이 결과 저장 폴더 내부에 실험 제목 폴더 하나 더 만들어야 안섞임.
+- `python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_example`
+- 인자: config 경로, 결과 저장 경로
+- results/dff_example 과 같이 결과 저장 폴더(results) 내부에 실험 제목 폴더(dff_example) 하나 더 만들어야 함
+
+### 5. ToDo
+- 10. 8.
+  - 구현 완료
+    - DFF (num_classes = 2, num_frames = 16)
+      - `dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py`
+      - `dff_faster-rcnn_r101-dc5_1xb1-10e_ceusvid.py`
+      - `dff_faster-rcnn_x101-dc5_1xb1-10e_ceusvid.py`
+    - FGFA (num_classes = 2, num_frames = 16)
+      - `fgfa_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py`
+      - `fgfa_faster-rcnn_r101-dc5_1xb1-10e_ceusvid.py`
+      - `fgfa_faster-rcnn_x101-dc5_1xb1-10e_ceusvid.py`
+  - 구현 예정
+    - DFF (num_classes = 1)
+    - FGFA (num_classes = 1)
+    
