@@ -79,7 +79,48 @@ Supported Datasets
 - [x] [VOT2018](https://www.votchallenge.net/vot2018/)
 
 ## For CEUS
-### 1. data 폴더 만들기
+
+### 1. conda 생성
+
+```bash
+# 1. 환경 생성
+conda create -n mmlab python=3.9 -y
+conda activate mmlab
+
+# 2. pytorch, torchvision, cuda
+conda install pytorch=1.11.0 torchvision cudatoolkit=11.3 -c pytorch
+
+# 3. mmengine
+pip install 'mmengine==0.10.7'
+
+# 4. mmcv
+pip install 'mmcv==2.0.0rc4' -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.11/index.html
+
+# 5. mmdet
+git clone -b v3.0.0rc5 https://github.com/open-mmlab/mmdetection.git
+cd mmdetection
+pip install -r requirements/build.txt
+pip install -v -e .
+
+# 6. mmtrack
+cd ..
+git clone https://github.com/limlimlim00/CEUS_mmtracking.git
+cd mmtracking
+pip install -r requirements/build.txt
+pip install -v -e .
+
+# 7. eval용 라이브러리
+pip install git+https://github.com/JonathonLuiten/TrackEval.git
+
+# 8. opencv-python version (6번에서 나온 에러: numpy와 호환되게)
+pip uninstall -y opencv-python
+pip install 'opencv-python==4.7.0.72'
+
+# 9. 데모
+python demo/demo_mot_vis.py configs/mot/deepsort/deepsort_faster-rcnn_r50_fpn_8xb2-4e_mot17halftrain_test-mot17halfval.py —input demo/demo.mp4 —output mot.mp4
+```
+
+### 2. data 폴더 만들기
 - mmtracking 하위에 data/CEUS 폴더 생성
 - data/CEUS 내부에 annotations, Annotations, Data 폴더 생성
 - Annotations 내부에 json, Data 내부에 원본 데이터 넣기
@@ -106,12 +147,12 @@ mmtracking/
 │           └── fold_4/
 ```
 
-### 2. COCOVID json
+### 3. COCOVID json
 - json을 cocovid json 형식으로 수정
 - `tools/dataset_converters/ceus/ceus2coco.py` 실행 (전역변수 경로 수정) - annotations 폴더에 ceus_train.json, ceus_val.json 생성
 - `tools/dataset_converters/ceus/fill_blank.py` 실행 (전역변수 경로 수정) - blank.png 생성
 
-### 3. Configs
+### 4. Configs
 - configs/vid 폴더 내부에 모델 별로 config 분류
 - config 이름 형식: {모델}\_{백본}\_{GPU 갯수 및 batch 크기}-{epoch 수}\_{데이터셋}.py
 - ex. dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid
@@ -121,12 +162,12 @@ mmtracking/
   - epoch: 10
   - 데이터셋: ceusvid
 
-### 4. Train 돌리기
+### 5. Train 돌리기
 - `python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_example`
 - 인자: config 경로, 결과 저장 경로
 - results/dff_example 과 같이 결과 저장 폴더(results) 내부에 실험 제목 폴더(dff_example) 하나 더 만들어야 함
 
-### 5. ToDo
+### 6. ToDo
 - 10. 8.
   - 구현 완료
     - DFF (num_classes = 2, num_frames = 16)
