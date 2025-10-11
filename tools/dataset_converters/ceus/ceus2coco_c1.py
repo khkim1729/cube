@@ -8,7 +8,6 @@ OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
 OUT_TRAIN      = "ceus_c1_train.json"
 OUT_VAL        = "ceus_c1_val.json"
 
-
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")
 META_AUG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding_aug.json")
 
@@ -142,7 +141,7 @@ def main():
     out_train = os.path.join(OUT_DIR, OUT_TRAIN)
     with open(out_train, "w", encoding="utf-8") as f:
         json.dump(coco_train, f, ensure_ascii=False)
-    print(f"[OK] ceus_train.json → {out_train}")
+    print(f"[OK] {OUT_TRAIN} → {out_train}")
     print(f"  videos={len(coco_train['videos'])}, images={len(coco_train['images'])}, anns={len(coco_train['annotations'])}")
 
     # ----- Val -----
@@ -151,7 +150,7 @@ def main():
     out_val = os.path.join(OUT_DIR, OUT_VAL)
     with open(out_val, "w", encoding="utf-8") as f:
         json.dump(coco_val, f, ensure_ascii=False)
-    print(f"[OK] ceus_val.json → {out_val}")
+    print(f"[OK] {OUT_VAL} → {out_val}")
     print(f"  videos={len(coco_val['videos'])}, images={len(coco_val['images'])}, anns={len(coco_val['annotations'])}")
 
 if __name__ == "__main__":

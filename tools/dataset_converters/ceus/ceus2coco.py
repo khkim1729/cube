@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 # CONFIG 전역 변수 설정
 DATA_ROOT      = "/home/introai21/mmtracking/data/CEUS"                   # CEUS 데이터 루트
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
+OUT_TRAIN      = "ceus_train.json"
+OUT_VAL        = "ceus_val.json"
 
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")
 META_AUG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding_aug.json")
@@ -136,19 +138,19 @@ def main():
     # ----- Train -----
     train_entries = meta_org + meta_aug
     coco_train = to_cocovid(train_entries, include_folds=train_folds)
-    out_train = os.path.join(OUT_DIR, "ceus_train.json")
+    out_train = os.path.join(OUT_DIR, OUT_TRAIN)
     with open(out_train, "w", encoding="utf-8") as f:
         json.dump(coco_train, f, ensure_ascii=False)
-    print(f"[OK] ceus_train.json → {out_train}")
+    print(f"[OK] {OUT_TRAIN} → {out_train}")
     print(f"  videos={len(coco_train['videos'])}, images={len(coco_train['images'])}, anns={len(coco_train['annotations'])}")
 
     # ----- Val -----
     val_entries = meta_org + meta_aug
     coco_val = to_cocovid(val_entries, include_folds=val_folds)
-    out_val = os.path.join(OUT_DIR, "ceus_val.json")
+    out_val = os.path.join(OUT_DIR, OUT_VAL)
     with open(out_val, "w", encoding="utf-8") as f:
         json.dump(coco_val, f, ensure_ascii=False)
-    print(f"[OK] ceus_val.json → {out_val}")
+    print(f"[OK] {OUT_VAL} → {out_val}")
     print(f"  videos={len(coco_val['videos'])}, images={len(coco_val['images'])}, anns={len(coco_val['annotations'])}")
 
 if __name__ == "__main__":
