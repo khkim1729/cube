@@ -108,8 +108,8 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
         vid_id += 1
 
     info_block = {
-        "description": "CEUS liver dataset",
-        "date_created": "2025-10-08",
+        "description": "CEUS liver dataset (1 Class: lesion)",
+        "date_created": "2025-10-11",
         "contributor": "SNU Medical AI Lab CEUS Team",
         "version": "1.0"
     }
