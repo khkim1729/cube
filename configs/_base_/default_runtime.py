@@ -4,7 +4,15 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=1),
+    checkpoint=dict(  # 최근 5개만 유지
+        type='CheckpointHook',
+        interval=1,
+        max_keep_ckpts=5,
+        save_best='coco/bbox_mAP_50',
+        rule='greater',
+        save_last=True,
+        save_optimizer=True
+    ),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='TrackVisualizationHook', draw=False),
 )
