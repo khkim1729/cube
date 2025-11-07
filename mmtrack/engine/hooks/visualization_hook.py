@@ -133,15 +133,55 @@ class TrackVisualizationHook(Hook):
 
             out_file = None
             if self.test_out_dir is not None:
-                out_file = osp.basename(img_path)
-                out_file = osp.join(self.test_out_dir, out_file)
+                # --- PID 단위 하위 폴더로 분류 저장 ---
+                pid = None
+                frame_id = 0
+                img_name = 'unknown.png'
+                safe_name = 'test_img'
+                is_aug = False  # 기본값
 
-            self._visualizer.add_datasample(
-                osp.basename(img_path) if self.show else 'test_img',
-                img,
-                data_sample=data_sample,
-                show=self.show,
-                wait_time=self.wait_time,
-                pred_score_thr=self.score_thr,
-                out_file=out_file,
-                step=batch_idx)
+                if hasattr(data_sample, 'metainfo'):
+                    meta = data_sample.metainfo
+
+                    def _first(m, key, default=None):
+                        v = m.get(key, default)
+                        if isinstance(v, (list, tuple)):
+                            return v[0] if len(v) > 0 else default
+                        return v
+
+                    pid = _first(meta, 'pid')
+                    frame_id = int(_first(meta, 'frame_id', 0))
+                    img_path = _first(meta, 'img_path')
+                    is_aug = bool(_first(meta, 'is_aug'))
+
+                    if img_path:
+                        img_name = osp.basename(img_path)
+                        safe_name = osp.basename(img_path)
+                    else:
+                        img_name = f"{frame_id:02d}.png"
+                        safe_name = f"{pid or 'unknown'}_{frame_id:02d}"
+
+                pid_str = str(pid) if pid is not None else 'unknown'
+                suffix = 'aug' if is_aug else 'org'
+                pid_folder = f"{pid_str}_{suffix}"
+
+                # 저장 경로: <work_dir>/<test_out_dir>/<pid_folder>/
+                out_dir = osp.join(self.test_out_dir, pid_folder)
+                mkdir_or_exist(out_dir)
+
+                # 파일명: id_12_원본파일명.png
+                out_file = osp.join(out_dir, f"id_{frame_id:02d}_{img_name}")
+
+                # 시각화 저장 (GT+Pred)
+                self._visualizer.add_datasample(
+                    safe_name if self.show else 'test_img',
+                    img,
+                    data_sample=data_sample,
+                    show=self.show,
+                    wait_time=self.wait_time,
+                    pred_score_thr=self.score_thr,  # 훅 설정값 사용
+                    out_file=out_file,
+                    draw_gt=True,
+                    draw_pred=True,
+                    step=batch_idx
+                )
