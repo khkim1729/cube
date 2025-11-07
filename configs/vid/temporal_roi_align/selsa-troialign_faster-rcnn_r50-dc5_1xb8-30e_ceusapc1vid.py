@@ -64,4 +64,25 @@ optim_wrapper = dict(
     accumulative_counts=8
 )
 
-visualizer = dict(type='DetLocalVisualizer')
+# vis_backends: where to save
+vis_backends = [dict(type='LocalVisBackend')]
+
+# visualizer: how to draw
+visualizer = dict(
+    type='DetLocalVisualizerOverlay',
+    name='visualizer',
+    vis_backends=vis_backends,
+    save_dir=None
+)
+
+# custom_hooks: when to draw
+custom_hooks = [
+    dict(
+        type='TrackVisualizationHook',
+        draw=True,
+        interval=1,
+        score_thr=0.0,
+        show=False,        # 창 띄우지 않고 파일 저장
+        test_out_dir='vis'
+    )
+]

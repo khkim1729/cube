@@ -20,9 +20,14 @@ test_pipeline = [
         share_random_params=True,
         transforms=[
             dict(type='LoadImageFromFile'),
+            dict(type='LoadTrackAnnotations', with_instance_id=True),
             dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=False),
         ]),
-    dict(type='PackTrackInputs', pack_single_img=False)
+    dict(type='PackTrackInputs',
+         pack_single_img=False,
+         meta_keys=('img_id','img_path','ori_shape','img_shape','scale_factor',  # visualization 결과 저장을 위해 metadata 추가
+             'video_id','frame_id','pid','fold','category','phase','is_aug')
+         )
 ]
 
 # dataloader
