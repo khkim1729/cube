@@ -123,7 +123,8 @@ python demo/demo_mot_vis.py configs/mot/deepsort/deepsort_faster-rcnn_r50_fpn_8x
 ### 2. data 폴더 만들기
 - mmtracking 하위에 data/CEUS 폴더 생성
 - data/CEUS 내부에 annotations, Annotations, Data 폴더 생성
-- Annotations 내부에 json, Data 내부에 원본 데이터 넣기
+- Annotations 내부에 원본 padding json 넣기
+- Data 내부에 원본 데이터 넣기
 
 ```
 mmtracking/
@@ -154,7 +155,7 @@ mmtracking/
 
 ### 4. Configs
 - configs/vid 폴더 내부에 모델 별로 config 분류
-- config 이름 형식: {모델}\_{백본}\_{GPU 갯수 및 batch 크기}-{epoch 수}\_{데이터셋}.py
+- config 이름 형식: `{모델}_{백본}_{GPU 갯수 및 batch 크기}-{epoch 수}_{데이터셋}.py`
 - ex. dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid
   - 모델: dff
   - 백본: faster-rcnn_r50-dc5
@@ -162,23 +163,23 @@ mmtracking/
   - epoch: 10
   - 데이터셋: ceusvid
 
-### 5. Train 돌리기
-- `python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_example`
-- 인자: config 경로, 결과 저장 경로
-- results/dff_example 과 같이 결과 저장 폴더(results) 내부에 실험 제목 폴더(dff_example) 하나 더 만들어야 함
+### 5. Train
+- `python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-30e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_r50_30e`
+- 인자
+  - config 경로 (필수)
+  - `--work-dir`: 결과 저장 경로
+- results/dff_r50_30e 과 같이 결과 저장 폴더(results) 내부에 실험 제목 폴더(dff_r50_30e) 하나 더 만들어야 함
+- 내부에 timestamp 폴더가 또 생기기 때문
 
-### 6. ToDo
-- 10. 8.
-  - 구현 완료
-    - DFF (num_classes = 2, num_frames = 16)
-      - `dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py`
-      - `dff_faster-rcnn_r101-dc5_1xb1-10e_ceusvid.py`
-      - `dff_faster-rcnn_x101-dc5_1xb1-10e_ceusvid.py`
-    - FGFA (num_classes = 2, num_frames = 16)
-      - `fgfa_faster-rcnn_r50-dc5_1xb1-10e_ceusvid.py`
-      - `fgfa_faster-rcnn_r101-dc5_1xb1-10e_ceusvid.py`
-      - `fgfa_faster-rcnn_x101-dc5_1xb1-10e_ceusvid.py`
-  - 구현 예정
-    - DFF (num_classes = 1)
-    - FGFA (num_classes = 1)
-    
+### 6. Training Plot
+- `python tools/analysis_tools/draw_log_plots.py --json results/dff_r50_30e/20251011_174344/vis_data/20251011_174344.json --out_dir results/dff_r50_30e/20251011_174344/vis_data`
+- 인자
+  - `--json`: training 결과 json 경로
+  - `--out_dir`: plot 저장 경로
+
+### 7. Test & Visualization
+- `python tools/test.py /home/introai21/mmtracking/configs/vid/selsa/selsa_faster-rcnn_r101-dc5_1xb8-30e_ceusapc1vid.py --checkpoint /home/introai21/mmtracking/results/selsa_r101_b8_30e_apc1/best_coco_bbox_mAP_50_epoch_12.pth --work-dir /home/introai21/mmtracking/results/selsa_r101_b8_30e_apc1`
+- 인자
+  - config 경로 (필수)
+  - `--checkpoint`: test에 사용할 체크포인트
+  - `--work-dir`: 실험 결과 저장할 폴더 (vis 폴더 내부에 시각화 결과 저장)
