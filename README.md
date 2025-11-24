@@ -105,7 +105,7 @@ pip install -v -e .
 # 6. mmtrack
 cd ..
 git clone https://github.com/limlimlim00/CEUS_mmtracking.git
-cd mmtracking
+cd CEUS_mmtracking
 pip install -r requirements/build.txt
 pip install -v -e .
 
