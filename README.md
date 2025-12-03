@@ -100,14 +100,15 @@ pip install 'mmcv==2.0.0rc4' -f https://download.openmmlab.com/mmcv/dist/cu113/t
 git clone -b v3.0.0rc5 https://github.com/open-mmlab/mmdetection.git
 cd mmdetection
 pip install -r requirements/build.txt
-pip install -v -e .
+conda install "numpy<2"
+pip install -v -e . --no-build-isolation
 
 # 6. mmtrack
 cd ..
 git clone https://github.com/limlimlim00/CEUS_mmtracking.git
 cd CEUS_mmtracking
 pip install -r requirements/build.txt
-pip install -v -e .
+pip install -v -e . --no-build-isolation
 
 # 7. eval용 라이브러리
 pip install git+https://github.com/JonathonLuiten/TrackEval.git
@@ -117,7 +118,7 @@ pip uninstall -y opencv-python
 pip install 'opencv-python==4.7.0.72'
 
 # 9. 데모
-python demo/demo_mot_vis.py configs/mot/deepsort/deepsort_faster-rcnn_r50_fpn_8xb2-4e_mot17halftrain_test-mot17halfval.py —input demo/demo.mp4 —output mot.mp4
+python demo/demo_mot_vis.py configs/mot/deepsort/deepsort_faster-rcnn_r50_fpn_8xb2-4e_mot17halftrain_test-mot17halfval.py --input demo/demo.mp4 --output mot.mp4
 ```
 
 ### 2. data 폴더 만들기
