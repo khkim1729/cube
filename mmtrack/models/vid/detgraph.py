@@ -200,9 +200,13 @@ class DetGraph(BaseVideoDetector):
             rescale=rescale,
         )
 
-        out_sample = deepcopy(track_sample)
-        out_sample.pred_det_instances = results_list
-        return [out_sample]
+        out_samples = []
+        for fs, preds in zip(frame_samples, results_list):
+            out_fs = deepcopy(fs)
+            out_fs.pred_det_instances = preds
+            out_samples.append(out_fs)
+
+        return out_samples
 
     def aug_test(self,
                  inputs: dict,
