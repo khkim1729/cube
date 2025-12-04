@@ -71,8 +71,8 @@ class CeusDGVIDDataset(BaseVideoDataset):
                     img_ids=[img_id], cat_ids=self.cat_ids)
                 raw_ann_info = coco.load_anns(ann_ids)
 
-                # is_vid_train_frame 없음
-                valid_data_indices.append(data_id)
+                if raw_img_info.get('frame_id', 0) == 0:
+                    valid_data_indices.append(data_id)
 
                 # get data_info
                 parsed_data_info = self.parse_data_info(
