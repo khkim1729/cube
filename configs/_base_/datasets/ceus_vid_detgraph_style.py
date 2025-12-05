@@ -28,7 +28,7 @@ test_pipeline = [
          pack_single_img=False,
          meta_keys=('img_id','img_path','ori_shape','img_shape','scale_factor',  # visualization 결과 저장을 위해 metadata 추가
                     'video_id','frame_id','pid','fold','category','phase','is_aug',
-                    'video_label', 'video_category', 'phase')
+                    'video_label', 'video_category')
          )
 ]
 
@@ -83,7 +83,7 @@ test_dataloader = val_dataloader
 
 # evaluator
 val_evaluator = dict(
-    type='CocoVideoMetric',
+    type='DetGraphVideoMetric',
     ann_file=data_root + 'annotations/ceus_dg_val.json',
     metric='bbox')
 

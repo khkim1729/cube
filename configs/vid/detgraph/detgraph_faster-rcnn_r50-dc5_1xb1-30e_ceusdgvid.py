@@ -1,20 +1,23 @@
 _base_ = [
     '../../_base_/models/faster-rcnn_r50-dc5.py',
-    '../../_base_/datasets/ceus_vid_dg_style.py',
+    '../../_base_/datasets/ceus_vid_detgraph_style.py',
     '../../_base_/default_runtime.py'
 ]
+
 model = dict(
-    type='DetGraph',
+    type='mmtrack.DetGraph',
     detector=dict(
         roi_head=dict(
             type='mmtrack.DetGraphRoIHead',
             bbox_head=dict(
                 type='mmtrack.DetGraphBBoxHead',
+                in_channels=512,          # RoIExtractor out_channels와 일치
                 num_shared_fcs=2,
+                num_classes=1,            # lesion foreground 1개
                 aggregator=dict(
                     type='mmtrack.DetGraphAggregator',
-                    in_channels=1024,
-                    num_attention_blocks=16)),
+                    in_channels=1024,     # shared FC output dim
+                    num_heads=8)),        # ← num_attention_blocks 아님
             bbox_roi_extractor=dict(
                 type='mmtrack.SingleRoIExtractor',
                 roi_layer=dict(
@@ -24,12 +27,20 @@ model = dict(
         ),
         test_cfg=dict(
             rcnn=dict(
-                score_thr=1e-4,
+                score_thr=0.5,
                 nms=dict(type='nms', iou_threshold=0.5),
                 max_per_img=1
             )
         )
-    )
+    ),
+    graph_head=dict(
+        type='mmtrack.DetGraphHead',      # 또는 DetGraphGCNHead
+        in_channels=1024,
+        num_classes=2,                    # video-level class 수
+        hidden_channels=256,
+        dropout=0.5
+    ),
+    graph_loss_weight=1.0
 )
 
 # training schedule
@@ -67,7 +78,7 @@ vis_backends = [dict(type='LocalVisBackend')]
 
 # visualizer: how to draw
 visualizer = dict(
-    type='DetLocalVisualizerOverlay',
+    type='DetGraphLocalVisualizerOverlay',
     name='visualizer',
     vis_backends=vis_backends,
     save_dir=None
@@ -79,8 +90,8 @@ custom_hooks = [
         type='TrackVisualizationHook',
         draw=True,
         interval=1,
-        score_thr=0.0,
-        show=False,        # 창 띄우지 않고 파일 저장
+        score_thr=0.5,
+        show=False,
         test_out_dir='vis'
     )
 ]
