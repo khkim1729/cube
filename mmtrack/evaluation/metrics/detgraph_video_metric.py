@@ -1,91 +1,47 @@
+# mmtrack/evaluation/detgraph_video_metric.py 이런 식으로 두면 좋음
+
 # Copyright (c) OpenMMLab. All rights reserved.
-import warnings
 from typing import Optional, Sequence, List, Tuple
 
 import torch
-from mmdet.datasets.api_wrappers import COCO
-from mmdet.evaluation import CocoMetric
-from mmdet.structures.mask import encode_mask_results
 from mmengine.dist import broadcast_object_list, is_main_process
-from mmengine.fileio import FileClient
 
 from mmtrack.registry import METRICS
-from .base_video_metrics import collect_tracking_results
-
+from .coco_video_metric import CocoVideoMetric  # 🔴 네가 쓰던 원본 CocoVideoMetric
 
 @METRICS.register_module()
-class DetGraphVideoMetric(CocoMetric):
-    """COCO + Video-level classification metric.
+class DetGraphVideoMetric(CocoVideoMetric):
+    """CocoVideoMetric + Video-level classification metric.
 
-    - 기존 COCO bbox mAP는 그대로 유지
+    - COCO bbox mAP는 CocoVideoMetric 그대로 사용
     - DetGraph의 video-level logit(pred_graph_logits)과
-      video_label을 이용해 classification accuracy를 추가로 계산
+      video_label로 classification accuracy를 추가 계산
     """
 
-    def __init__(self, ann_file: Optional[str] = None, **kwargs) -> None:
-        super().__init__(**kwargs)
-        # if ann_file is not specified,
-        # initialize coco api with the converted dataset
-        if ann_file:
-            file_client = FileClient.infer_client(uri=ann_file)
-            with file_client.get_local_path(ann_file) as local_path:
-                self._coco_api = COCO(local_path)
-        else:
-            self._coco_api = None
+    def __init__(self,
+                 ann_file: Optional[str] = None,
+                 **kwargs) -> None:
+        # 🔴 detection 쪽 설정은 CocoVideoMetric에게 그대로 맡김
+        super().__init__(ann_file=ann_file, **kwargs)
 
         # video-level classification (gt, pred) 쌍을 모아둘 리스트
         # 각 원소는 (gt_label:int, pred_label:int)
         self.cls_results: List[Tuple[int, int]] = []
 
     def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
-        """Process one batch of data samples and predictions.
-
-        Note:
-            - detection: pred_det_instances → 기존 COCO 평가
-            - classification: pred_graph_logits & video_label → accuracy
+        """한 배치에 대해:
+        1) detection → 부모(CocoVideoMetric)의 process 호출
+        2) video-level cls → 별도로 gt/pred 쌍만 모아둔다
         """
+        # 1) detection은 원본 CocoVideoMetric이 하던 그대로
+        super().process(data_batch, data_samples)
+
+        # 2) video-level classification 정보만 추가 수집
         for data_sample in data_samples:
-            # ---------------------------
-            # 1) detection (기존 코드)
-            # ---------------------------
-            result = dict()
-            pred = data_sample['pred_det_instances']
-            result['img_id'] = data_sample['img_id']
-            result['bboxes'] = pred['bboxes'].cpu().numpy()
-            result['scores'] = pred['scores'].cpu().numpy()
-            result['labels'] = pred['labels'].cpu().numpy()
-            # encode mask to RLE
-            if 'masks' in pred:
-                result['masks'] = encode_mask_results(
-                    pred['masks'].detach().cpu().numpy())
-            # some detectors use different scores for bbox and mask
-            if 'mask_scores' in pred:
-                result['mask_scores'] = pred['mask_scores'].cpu().numpy()
-
-            # parse gt
-            gt = dict()
-            gt['width'] = data_sample['ori_shape'][1]
-            gt['height'] = data_sample['ori_shape'][0]
-            gt['img_id'] = data_sample['img_id']
-            if self._coco_api is None:
-                assert 'instances' in data_sample, \
-                    'ground truth is required for evaluation when ' \
-                    '`ann_file` is not provided'
-                gt['anns'] = data_sample['instances']
-            # add converted result to the results list
-            self.results.append((gt, result))
-
-            # ---------------------------
-            # 2) video-level classification
-            # ---------------------------
-            # DetGraph.predict()에서 첫 frame에만 pred_graph_logits를 달아두었고,
-            # 그 frame에 video_label도 들어 있다고 가정.
             if 'pred_graph_logits' in data_sample and 'video_label' in data_sample:
                 logits = data_sample['pred_graph_logits']
-                # logits: (1, num_classes) 형태의 Tensor일 것
                 if isinstance(logits, torch.Tensor):
                     logits = logits.detach().cpu()
-                # (1, num_classes) → scalar predicted label
                 pred_label = int(logits.argmax(dim=-1).item())
 
                 gt_label = data_sample['video_label']
@@ -97,53 +53,41 @@ class DetGraphVideoMetric(CocoMetric):
                 self.cls_results.append((gt_label, pred_label))
 
     def evaluate(self, size: int) -> dict:
-        """Evaluate the model performance of the whole dataset.
+        """Evaluate 전체 데이터셋.
 
-        Returns:
-            dict: {coco metrics..., 'video_cls_acc': float}
+        - 우선 CocoVideoMetric.evaluate로 bbox mAP들 계산
+        - 그 위에 video_cls_acc를 하나 추가
         """
-        if len(self.results) == 0:
-            warnings.warn(
-                f'{self.__class__.__name__} got empty `self.results`. Please '
-                'ensure that the processed results are properly added into '
-                '`self.results` in `process` method.')
+        # 1) detection metric 먼저 계산 (bbox_mAP_* 다 여기서 세팅됨)
+        _metrics = super().evaluate(size)
 
-        # detection 결과 수집 (기존 코드)
-        results = collect_tracking_results(self.results, self.collect_device)
-        # classification 결과도 같은 방식으로 모아줌
-        cls_results = collect_tracking_results(self.cls_results, self.collect_device)
+        # 분산 환경일 경우 video cls 결과도 모아야 함
+        if len(self.cls_results) > 0:
+            results_list = [self.cls_results]
+            broadcast_object_list(results_list)
+            gathered_cls = results_list[0]
+        else:
+            gathered_cls = []
 
+        # 2) video-level classification accuracy
         if is_main_process():
-            # 1) COCO detection metrics
-            _metrics = self.compute_metrics(results)  # type: ignore
-
-            # 2) video-level classification accuracy
-            if len(cls_results) > 0:
+            if len(gathered_cls) > 0:
                 correct = 0
                 total = 0
-                for gt_label, pred_label in cls_results:
+                for gt_label, pred_label in gathered_cls:
                     total += 1
                     if gt_label == pred_label:
                         correct += 1
                 video_cls_acc = correct / max(total, 1)
-                _metrics['video_cls_acc'] = video_cls_acc
             else:
-                # pred_graph_logits를 하나도 못 받은 경우
-                _metrics['video_cls_acc'] = 0.0
+                video_cls_acc = 0.0
 
-            # prefix 처리
+            # prefix 붙이기 (CocoVideoMetric와 동일하게 self.prefix 사용)
+            key_name = 'video_cls_acc'
             if self.prefix:
-                _metrics = {
-                    '/'.join((self.prefix, k)): v
-                    for k, v in _metrics.items()
-                }
-            metrics = [_metrics]
-        else:
-            metrics = [None]  # type: ignore
+                key_name = '/'.join((self.prefix, key_name))
+            _metrics[key_name] = video_cls_acc
 
-        broadcast_object_list(metrics)
-
-        # reset the results list
-        self.results.clear()
+        # 로컬 상태 리셋
         self.cls_results.clear()
-        return metrics[0]
+        return _metrics
