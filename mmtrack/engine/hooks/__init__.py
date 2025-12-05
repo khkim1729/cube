@@ -2,8 +2,9 @@
 from .siamrpn_backbone_unfreeze_hook import SiamRPNBackboneUnfreezeHook
 from .visualization_hook import TrackVisualizationHook
 from .yolox_mode_switch_hook import YOLOXModeSwitchHook
+from .detgraph_visualization_hook import DetGraphVisualizationHook
 
 __all__ = [
     'YOLOXModeSwitchHook', 'TrackVisualizationHook',
-    'SiamRPNBackboneUnfreezeHook'
+    'SiamRPNBackboneUnfreezeHook', 'DetGraphVisualizationHook'
 ]

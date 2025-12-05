@@ -87,7 +87,7 @@ visualizer = dict(
 # custom_hooks: when to draw
 custom_hooks = [
     dict(
-        type='TrackVisualizationHook',
+        type='DetGraphVisualizationHook',
         draw=True,
         interval=1,
         score_thr=0.5,

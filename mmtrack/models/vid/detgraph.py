@@ -262,9 +262,17 @@ class DetGraph(BaseVideoDetector):
             video_label = track_sample.metainfo.get("video_label", None)
 
             if (node_feats_graph is not None) and (video_label is not None):
+                # 1) 리스트/튜플인 경우 → 첫 원소만 사용 (영상당 라벨 1개라고 가정)
+                if isinstance(video_label, (list, tuple)):
+                    video_label = video_label[0]
+
+                # 2) 텐서/스칼라를 (1,) 형태 long 텐서로 정규화
                 if not torch.is_tensor(video_label):
-                    video_label = torch.tensor([video_label], dtype=torch.long,
-                                               device=node_feats_graph.device)
+                    video_label = torch.tensor(
+                        [video_label],
+                        dtype=torch.long,
+                        device=node_feats_graph.device
+                    )
                 else:
                     video_label = video_label.to(node_feats_graph.device).view(1)
 
