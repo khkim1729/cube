@@ -102,7 +102,7 @@ class DetGraph(BaseVideoDetector):
         num_frames: int,
         cls_score: Optional[Tensor] = None,  # (N, num_classes)
         lesion_cls_idx: int = 1,
-        score_thresh: float = 0.3,
+        score_thresh: float = 0.5,
     ) -> Optional[Tensor]:
         if rois is None or rois.numel() == 0:
             return None
