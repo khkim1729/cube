@@ -27,7 +27,7 @@ model = dict(
         ),
         test_cfg=dict(
             rcnn=dict(
-                score_thr=0.5,
+                score_thr=1e-4,
                 nms=dict(type='nms', iou_threshold=0.5),
                 max_per_img=1
             )
@@ -88,7 +88,7 @@ visualizer = dict(
 custom_hooks = [
     dict(
         type='DetGraphVisualizationHook',
-        draw=True,
+        draw=False,
         interval=1,
         score_thr=0.5,
         show=False,
