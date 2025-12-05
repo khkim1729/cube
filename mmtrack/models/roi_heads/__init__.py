@@ -2,5 +2,6 @@
 from .bbox_heads import SelsaBBoxHead
 from .roi_extractors import SingleRoIExtractor
 from .selsa_roi_head import SelsaRoIHead
+from .detgraph_roi_head import DetGraphRoIHead
 
-__all__ = ['SelsaRoIHead', 'SelsaBBoxHead', 'SingleRoIExtractor']
+__all__ = ['SelsaRoIHead', 'SelsaBBoxHead', 'SingleRoIExtractor', 'DetGraphRoIHead']
