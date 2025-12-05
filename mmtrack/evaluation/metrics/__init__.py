@@ -6,8 +6,9 @@ from .reid_metrics import ReIDMetrics
 from .sot_metrics import SOTMetric
 from .tao_metrics import TAOMetric
 from .youtube_vis_metrics import YouTubeVISMetric
+from .detgraph_video_metric import DetGraphVideoMetric
 
 __all__ = [
     'ReIDMetrics', 'BaseVideoMetric', 'CocoVideoMetric', 'YouTubeVISMetric',
-    'MOTChallengeMetrics', 'SOTMetric', 'TAOMetric'
+    'MOTChallengeMetrics', 'SOTMetric', 'TAOMetric', 'DetGraphVideoMetric'
 ]
