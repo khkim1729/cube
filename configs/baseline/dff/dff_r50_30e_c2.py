@@ -1,29 +1,14 @@
 _base_ = [
     '../../_base_/models/faster-rcnn_r50-dc5.py',
-    '../../_base_/datasets/ceus_vid_selsa_c1_style.py',
+    '../../_base_/datasets/ceus_vid_dff_c2_style.py',
     '../../_base_/default_runtime.py'
 ]
 model = dict(
-    type='SELSA',
+    type='DFF',
     detector=dict(
-        roi_head=dict(
-            type='mmtrack.SelsaRoIHead',
-            bbox_head=dict(
-                type='mmtrack.SelsaBBoxHead',
-                in_channels=512,
-                num_shared_fcs=2,
-                num_classes=1,
-                aggregator=dict(
-                    type='mmtrack.SelsaAggregator',
-                    in_channels=1024,
-                    num_attention_blocks=16)),
-            bbox_roi_extractor=dict(
-                type='mmtrack.SingleRoIExtractor',
-                roi_layer=dict(
-                    type='RoIAlign', output_size=7, sampling_ratio=2),
-                out_channels=512,
-                featmap_strides=[16])
-        ),
+        train_cfg=dict(
+            rpn_proposal=dict(max_per_img=1000),
+            rcnn=dict(sampler=dict(num=512))),
         test_cfg=dict(
             rpn=dict(
                 nms_pre=1000,
@@ -36,8 +21,17 @@ model = dict(
                 max_per_img=1
             )
         )
-    )
-)
+    ),
+    motion=dict(
+        type='FlowNetSimple',
+        img_scale_factor=1.0,
+        init_cfg=dict(
+            type='Pretrained',
+            checkpoint=  # noqa: E251
+            'https://download.openmmlab.com/mmtracking/pretrained_weights/flownet_simple.pth'  # noqa: E501
+        )),
+    train_cfg=None,
+    test_cfg=dict(key_frame_interval=1))
 
 # training schedule
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=30, val_interval=1)

@@ -5,9 +5,9 @@ from typing import List, Dict, Any
 # CONFIG 전역 변수 설정
 DATA_ROOT      = "data/CEUS"
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
-OUT_TRAIN      = "ceus_c1_train.json"
-OUT_VAL        = "ceus_c1_val.json"
-OUT_TEST       = "ceus_c1_test.json"
+OUT_TRAIN      = "ceus_c2_train.json"
+OUT_VAL        = "ceus_c2_val.json"
+OUT_TEST       = "ceus_c2_test.json"
 
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")
 META_AUG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding_aug.json")
@@ -19,8 +19,8 @@ ORG_DIRNAME    = "org"
 AUG_DIRNAME    = "aug"
 
 # 카테고리 정의
-CATEGORIES = [{"id": 1, "name": "lesion"}]
-CAT2ID = {"FNH": 1, "HCC": 1}
+CATEGORIES = [{"id": 1, "name": "FNH"}, {"id": 2, "name": "HCC"}]
+CAT2ID = {"FNH": 1, "HCC": 2}
 
 # 유틸 함수
 def load_meta(path: str) -> List[Dict[str, Any]]:
@@ -109,8 +109,8 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
         vid_id += 1
 
     info_block = {
-        "description": "CEUS liver dataset (1 Class: lesion)",
-        "date_created": "2025-10-11",
+        "description": "CEUS liver dataset",
+        "date_created": "2025-10-08",
         "contributor": "SNU Medical AI Lab CEUS Team",
         "version": "1.0"
     }

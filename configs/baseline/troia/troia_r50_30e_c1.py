@@ -1,6 +1,6 @@
 _base_ = [
     '../../_base_/models/faster-rcnn_r50-dc5.py',
-    '../../_base_/datasets/ceus_vid_selsa_c1_style.py',
+    '../../_base_/datasets/ceus_vid_troia_c1_style.py',
     '../../_base_/default_runtime.py'
 ]
 model = dict(
@@ -8,21 +8,22 @@ model = dict(
     detector=dict(
         roi_head=dict(
             type='mmtrack.SelsaRoIHead',
+            bbox_roi_extractor=dict(
+                type='mmtrack.TemporalRoIAlign',
+                num_most_similar_points=2,
+                num_temporal_attention_blocks=4,
+                roi_layer=dict(
+                    type='RoIAlign', output_size=7, sampling_ratio=2),
+                out_channels=512,
+                featmap_strides=[16]),
             bbox_head=dict(
                 type='mmtrack.SelsaBBoxHead',
-                in_channels=512,
-                num_shared_fcs=2,
+                num_shared_fcs=3,
                 num_classes=1,
                 aggregator=dict(
                     type='mmtrack.SelsaAggregator',
                     in_channels=1024,
-                    num_attention_blocks=16)),
-            bbox_roi_extractor=dict(
-                type='mmtrack.SingleRoIExtractor',
-                roi_layer=dict(
-                    type='RoIAlign', output_size=7, sampling_ratio=2),
-                out_channels=512,
-                featmap_strides=[16])
+                    num_attention_blocks=16))
         ),
         test_cfg=dict(
             rpn=dict(

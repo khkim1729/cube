@@ -1,6 +1,6 @@
 _base_ = [
     '../../_base_/models/faster-rcnn_r50-dc5.py',
-    '../../_base_/datasets/ceus_vid_selsa_c1_style.py',
+    '../../_base_/datasets/ceus_vid_selsa_c2_style.py',
     '../../_base_/default_runtime.py'
 ]
 model = dict(
@@ -12,7 +12,7 @@ model = dict(
                 type='mmtrack.SelsaBBoxHead',
                 in_channels=512,
                 num_shared_fcs=2,
-                num_classes=1,
+                num_classes=2,
                 aggregator=dict(
                     type='mmtrack.SelsaAggregator',
                     in_channels=1024,

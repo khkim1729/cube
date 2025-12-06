@@ -1,12 +1,16 @@
+# ceus2coco_dg.py
+# 기존 ceus json을, 모델에 입력할 수 있는 형태의 json으로 바꿈
+
 import os, json
 from ast import literal_eval
 from typing import List, Dict, Any
 
 # CONFIG 전역 변수 설정
-DATA_ROOT      = "/home/introai21/mmtracking/data/CEUS"                   # CEUS 데이터 루트
+DATA_ROOT      = "data/CEUS"
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
-OUT_TRAIN      = "ceus_train.json"
-OUT_VAL        = "ceus_val.json"
+OUT_TRAIN      = "ceus_dg_train.json"
+OUT_VAL        = "ceus_dg_val.json"
+OUT_TEST       = "ceus_dg_test.json"
 
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")
 META_AUG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding_aug.json")
@@ -17,9 +21,13 @@ IMG_H, IMG_W   = 512, 512
 ORG_DIRNAME    = "org"
 AUG_DIRNAME    = "aug"
 
-# 카테고리 정의
-CATEGORIES = [{"id": 1, "name": "FNH"}, {"id": 2, "name": "HCC"}]
-CAT2ID = {"FNH": 1, "HCC": 2}
+# 카테고리 정의 (클래스 1개)
+CATEGORIES = [{"id": 1, "name": "lesion"}]
+CAT2ID = {"FNH": 1, "HCC": 1}
+
+# Phase 매핑 (AP=0, PP, LP=1, KP=2)
+PHASE2ID = {"AP": 0, "PP": 1, "LP": 1, "KP": 2}
+UNKNOWN_PHASE_ID = -1  # 유효하지 않은 phase에 대한 값
 
 # 유틸 함수
 def load_meta(path: str) -> List[Dict[str, Any]]:
@@ -30,7 +38,7 @@ def load_meta(path: str) -> List[Dict[str, Any]]:
 def is_blank(fname: str) -> bool:
     return fname.lower() == "blank.png"
 
-# CEUS → CocoVID 변환 로직
+# CEUS -> CocoVID 변환 로직
 def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[str, Any]:
     videos, images, anns = [], [], []
     vid_id, img_id, ann_id, global_inst_id = 1, 1, 1, 1
@@ -73,13 +81,20 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
                 cat, pid, phase_dir, fname
             ).replace("\\", "/")
 
+            # Phase ID 변환 (AP=0, PP, LP=1, KP=2)
+            phase_id = PHASE2ID.get(phase, UNKNOWN_PHASE_ID)
+
+            # 유효성 플래그: blank.png이거나 phase가 유효하지 않으면 invalid
+            is_valid = not is_blank(fname) and phase_id != UNKNOWN_PHASE_ID
+
             images.append({
                 "id": img_id,
                 "file_name": rel_path,
                 "height": IMG_H, "width": IMG_W,
                 "frame_id": t, "video_id": vid_id,
-                "pid": pid, "phase": phase, "fold": fold,
+                "pid": pid, "phase": phase, "phase_id": phase_id, "fold": fold,
                 "is_aug": bool(aug_flag),
+                "is_valid": is_valid,
                 "t1_min": t1_min[t] if t < len(t1_min) else None,
                 "t1_sec": t1_sec[t] if t < len(t1_sec) else None
             })
@@ -108,10 +123,10 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
         vid_id += 1
 
     info_block = {
-        "description": "CEUS liver dataset",
-        "date_created": "2025-10-08",
+        "description": "CEUS liver dataset (1 Class: lesion)",
+        "date_created": "2025-12-03",
         "contributor": "SNU Medical AI Lab CEUS Team",
-        "version": "1.0"
+        "version": "2.0"
     }
 
     return {
@@ -132,6 +147,7 @@ def main():
     ALL_FOLDS = {0, 1, 2, 3, 4}
     train_folds = sorted(list(ALL_FOLDS - {VAL_FOLD, TEST_FOLD}))
     val_folds   = [VAL_FOLD]
+    test_folds  = [TEST_FOLD]
 
     print(f"Train folds: {train_folds}, Val fold: {VAL_FOLD}, Test fold: {TEST_FOLD}")
 
@@ -152,6 +168,15 @@ def main():
         json.dump(coco_val, f, ensure_ascii=False)
     print(f"[OK] {OUT_VAL} → {out_val}")
     print(f"  videos={len(coco_val['videos'])}, images={len(coco_val['images'])}, anns={len(coco_val['annotations'])}")
+
+    # ----- Test -----
+    test_entries = meta_org + meta_aug
+    coco_test = to_cocovid(test_entries, include_folds=test_folds)
+    out_test = os.path.join(OUT_DIR, OUT_TEST)
+    with open(out_test, "w", encoding="utf-8") as f:
+        json.dump(coco_test, f, ensure_ascii=False)
+    print(f"[OK] {OUT_TEST} → {out_test}")
+    print(f"  videos={len(coco_test['videos'])}, images={len(coco_test['images'])}, anns={len(coco_test['annotations'])}")
 
 if __name__ == "__main__":
     main()
