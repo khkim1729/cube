@@ -1,5 +1,5 @@
 # dataset settings
-dataset_type = 'CeusC2VIDDataset'
+dataset_type = 'CeusC1VIDDataset'
 data_root = 'data/CEUS/'
 
 # data pipeline
@@ -14,6 +14,7 @@ train_pipeline = [
         ]),
     dict(type='PackTrackInputs')
 ]
+
 test_pipeline = [
     dict(
         type='TransformBroadcaster',
@@ -36,20 +37,21 @@ train_dataloader = dict(
     num_workers=2,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
+    # CEUS는 고정 크기이므로 AspectRatioBatchSampler 불필요
     dataset=dict(
         type=dataset_type,                  
         data_root=data_root,
-        ann_file='annotations/ceus_c2_train.json',
+        ann_file='annotations/ceus_c1_train.json',
         data_prefix=dict(img_path='Data'),     # file_name이 fold_k/... 시작
         filter_cfg=dict(filter_empty_gt=False, min_size=1),  # blank 프레임 유지
         pipeline=train_pipeline,
         load_as_video=True,
         key_img_sampler=dict(interval=1),       # CEUS: 모든 프레임을 key로 사용
         ref_img_sampler=dict(
-            num_ref_imgs=15,
-            frame_range=[-15, 15],
+            num_ref_imgs=1,
+            frame_range=[-1, 0],
             filter_key_img=True,
-            method='all_inclusive'
+            method='uniform'
         ),
     ),
 )
@@ -63,17 +65,12 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file='annotations/ceus_c2_val.json',
+        ann_file='annotations/ceus_c1_val.json',
         data_prefix=dict(img_path='Data'),
         pipeline=test_pipeline,
         load_as_video=True,
-        ref_img_sampler=dict(
-            num_ref_imgs=15,
-            frame_range=[-15, 15],
-            filter_key_img=True,
-            method='all_inclusive'
-        ),
-        test_mode=True
+        ref_img_sampler=None,
+        test_mode=True,
     ),
 )
 
@@ -86,28 +83,23 @@ test_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file='annotations/ceus_c2_test.json',
+        ann_file='annotations/ceus_c1_test.json',
         data_prefix=dict(img_path='Data'),
         pipeline=test_pipeline,
         load_as_video=True,
-        ref_img_sampler=dict(
-            num_ref_imgs=15,
-            frame_range=[-15, 15],
-            filter_key_img=True,
-            method='all_inclusive'
-        ),
-        test_mode=True
+        ref_img_sampler=None,
+        test_mode=True,
     ),
 )
 
 # evaluator
 val_evaluator = dict(
     type='CocoVideoMetric',
-    ann_file=data_root + 'annotations/ceus_c2_val.json',
+    ann_file=data_root + 'annotations/ceus_c1_val.json',
     metric='bbox')
 
 test_evaluator = dict(
     type='CocoVideoMetric',
-    ann_file=data_root + 'annotations/ceus_c2_test.json',
+    ann_file=data_root + 'annotations/ceus_c1_test.json',
     metric='bbox'
 )

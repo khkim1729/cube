@@ -79,7 +79,28 @@ val_dataloader = dict(
     ),
 )
 
-test_dataloader = val_dataloader
+test_dataloader = dict(
+    batch_size=1,
+    num_workers=2,
+    persistent_workers=True,
+    drop_last=False,
+    sampler=dict(type='VideoSampler'),
+    dataset=dict(
+        type=dataset_type,
+        data_root=data_root,
+        ann_file='annotations/ceus_dg_test.json',
+        data_prefix=dict(img_path='Data'),
+        pipeline=test_pipeline,
+        load_as_video=True,
+        ref_img_sampler=dict(
+            num_ref_imgs=15,
+            frame_range=[-15, 15],
+            filter_key_img=True,
+            method='all_inclusive'
+        ),
+        test_mode=True
+    ),
+)
 
 # evaluator
 val_evaluator = dict(
@@ -87,4 +108,7 @@ val_evaluator = dict(
     ann_file=data_root + 'annotations/ceus_dg_val.json',
     metric='bbox')
 
-test_evaluator = val_evaluator
+test_evaluator = dict(
+    type='DetGraphVideoMetric',
+    ann_file=data_root + 'annotations/ceus_dg_test.json',
+    metric='bbox')
