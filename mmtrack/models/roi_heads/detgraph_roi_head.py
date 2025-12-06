@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
+from typing import Tuple, Optional, List
 
 import torch
 from mmdet.models import StandardRoIHead
@@ -13,6 +13,55 @@ from mmtrack.utils import ConfigType, InstanceList, SampleList
 @MODELS.register_module()
 class DetGraphRoIHead(StandardRoIHead):
 
+    # ------------------------------------------------
+    # helper: rois -> phase_ids (per RoI)
+    # ------------------------------------------------
+    def _build_phase_ids_for_rois(
+        self,
+        rois: Tensor,                 # (N, 5), 첫 열이 batch_idx
+        data_samples: SampleList      # len = batch_size (여기선 frame 개수)
+    ) -> Optional[Tensor]:
+        """각 RoI가 속한 frame의 phase_id를 모아서 (N,) Tensor로 만든다.
+
+        - json → dataset → data_sample.metainfo['phase_id']에
+          0(AP)/1(PP/LP)/2(KP)/-1(unknown) 이 들어 있다고 가정.
+        - 일부 케이스(phase_id 없음)에서는 None을 반환해서
+          bbox_head가 phase embedding을 생략하도록 한다.
+        """
+        if not hasattr(self.bbox_head, 'use_phase_embed') or \
+           not getattr(self.bbox_head, 'use_phase_embed', False):
+            return None
+
+        if rois.numel() == 0:
+            return None
+
+        batch_inds = rois[:, 0].long()  # (N,)
+        phase_list: List[int] = []
+        has_valid = False
+
+        for b in batch_inds:
+            meta = data_samples[int(b)].metainfo
+            pid = meta.get('phase_id', -1)
+            if pid is not None and pid >= 0:
+                has_valid = True
+            else:
+                pid = -1
+            phase_list.append(int(pid))
+
+        if not has_valid:
+            # 전부 unknown이면 굳이 embedding할 필요 없음
+            return None
+
+        phase_ids = torch.tensor(
+            phase_list,
+            dtype=torch.long,
+            device=rois.device
+        )
+        return phase_ids  # (N,)
+
+    # ------------------------------------------------
+    # TRAIN
+    # ------------------------------------------------
     def loss(self,
              x: Tuple[Tensor],
              rpn_results_list: InstanceList,
@@ -47,7 +96,7 @@ class DetGraphRoIHead(StandardRoIHead):
         # --------------------------
         # BBox head loss
         # --------------------------
-        bbox_results = self.bbox_loss(x, sampling_results)
+        bbox_results = self.bbox_loss(x, sampling_results, data_samples)
 
         losses = dict()
         # StandardRoIHead 스타일: loss_cls, loss_bbox는 각각 dict
@@ -65,16 +114,34 @@ class DetGraphRoIHead(StandardRoIHead):
 
         return losses
 
-    def _bbox_forward(self, x: Tuple[Tensor], rois: Tensor) -> dict:
+    # ------------------------------------------------
+    # 공통 bbox forward (train / test)
+    # ------------------------------------------------
+    def _bbox_forward(
+        self,
+        x: Tuple[Tensor],
+        rois: Tensor,
+        data_samples: Optional[SampleList] = None
+    ) -> dict:
 
+        # 1) RoIAlign
         bbox_feats = self.bbox_roi_extractor(
             x[:self.bbox_roi_extractor.num_inputs], rois
         )
 
+        # 2) shared head (있으면)
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)
 
-        cls_score, bbox_pred = self.bbox_head(bbox_feats)
+        # 3) phase embedding용 phase_ids 구성
+        if data_samples is not None:
+            phase_ids = self._build_phase_ids_for_rois(rois, data_samples)
+        else:
+            phase_ids = None
+
+        # 4) BBox head (phase_ids는 선택적으로 전달)
+        #    DetGraphBBoxHead.forward(x, phase_ids=None) 형태를 가정
+        cls_score, bbox_pred = self.bbox_head(bbox_feats, phase_ids=phase_ids)
 
         return dict(
             cls_score=cls_score,
@@ -82,10 +149,13 @@ class DetGraphRoIHead(StandardRoIHead):
             bbox_feats=bbox_feats
         )
 
-    def bbox_loss(self, x: Tuple[Tensor], sampling_results):
+    def bbox_loss(self,
+                  x: Tuple[Tensor],
+                  sampling_results,
+                  data_samples: SampleList):
 
         rois = bbox2roi([res.bboxes for res in sampling_results])
-        bbox_results = self._bbox_forward(x, rois)
+        bbox_results = self._bbox_forward(x, rois, data_samples=data_samples)
 
         # 여기서 loss_and_target이 반환하는 dict 전체를 받아서 merge
         # 보통 {'loss_cls': {...}, 'loss_bbox': {...}, 'bbox_targets': ...} 형태
@@ -100,6 +170,9 @@ class DetGraphRoIHead(StandardRoIHead):
         bbox_results.update(bbox_head_outs)
         return bbox_results
 
+    # ------------------------------------------------
+    # TEST
+    # ------------------------------------------------
     def predict(self,
                 x: Tuple[Tensor],
                 rpn_results_list: InstanceList,
@@ -107,7 +180,8 @@ class DetGraphRoIHead(StandardRoIHead):
                 rescale: bool = False):
 
         rois = bbox2roi([res.bboxes for res in rpn_results_list])
-        bbox_results = self._bbox_forward(x, rois)
+        # test에서도 phase embedding 동일하게 사용
+        bbox_results = self._bbox_forward(x, rois, data_samples=data_samples)
 
         # loss()에서 쓰는 것과 동일하게 캐시
         self.last_rois = rois

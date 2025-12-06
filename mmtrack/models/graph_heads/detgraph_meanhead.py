@@ -12,18 +12,17 @@ from mmtrack.utils import OptConfigType
 
 
 @MODELS.register_module()
-class DetGraphHead(BaseModule):
-    """Video-level graph classification head for DetGraph.
+class DetGraphMeanHead(BaseModule):
+    """Attention을 완전히 무시하고, 단순 mean pooling만 사용하는
+    video-level graph classification head.
 
     Inputs:
         - node_feats: (N_nodes, C)
-        - attn_weights (optional): (H, N_nodes, N_nodes)
+        - attn_weights (optional): (H, N_nodes, N_nodes)  # ← 받아도 무시
 
-    Behavior:
-        1) node_feats를 graph embedding 하나로 pooling
-           - attn_weights가 있으면, attention 기반 가중 합
-           - 없으면 단순 mean pooling
-        2) graph embedding -> MLP -> logits
+    동작:
+        1) node_feats를 단순 mean pooling → graph_feat (C,)
+        2) graph_feat -> MLP(FC + ReLU + Dropout + FC) -> logits
         3) loss(): CrossEntropy
         4) predict(): logits (softmax는 외부에서 필요시 적용)
     """
@@ -43,58 +42,30 @@ class DetGraphHead(BaseModule):
         self.hidden_channels = hidden_channels
         self.dropout = dropout
 
+        # 단순 MLP
         self.fc1 = nn.Linear(in_channels, hidden_channels)
         self.fc2 = nn.Linear(hidden_channels, num_classes)
         self.act = nn.ReLU(inplace=True)
         self.drop = nn.Dropout(dropout)
 
     # ----------------------------------------------------
-    # 1) node-level -> graph-level pooling
+    # 1) node-level -> graph-level pooling (mean only)
     # ----------------------------------------------------
     def _pool_graph(
         self,
-        node_feats: Tensor,          # (N, C)
-        attn_weights: Optional[Tensor] = None  # (H, N, N) or None
+        node_feats: Tensor,                   # (N, C)
+        attn_weights: Optional[Tensor] = None # 인자만 받고 무시
     ) -> Tensor:
-        """노드 임베딩을 그래프 임베딩 하나로 요약.
-
-        - attn_weights가 있으면:
-            각 노드의 "중요도"를 attention 기반으로 구해
-            가중합 pooling 수행
-        - 없으면:
-            단순 mean pooling
-        """
         assert node_feats.dim() == 2, \
             f'node_feats must be (N, C), got {node_feats.shape}'
         N, C = node_feats.shape
 
         if N == 0:
-            # 안전장치: 이 경우는 DetGraph에서 이미 걸러주지만,
-            # 혹시 몰라 zero vector 반환
+            # 안전장치: DetGraph 쪽에서 이미 필터링하지만, 혹시 몰라서
             return node_feats.new_zeros(C)
 
-        if attn_weights is None:
-            # (N, C) -> (C,)
-            graph_feat = node_feats.mean(dim=0)
-            return graph_feat
-
-        # attn_weights: (H, N, N)
-        # head 평균
-        attn_mean = attn_weights.mean(dim=0)  # (N, N)
-
-        # 각 노드의 "importance"를 attention 기반으로 계산
-        # - incoming + outgoing attention을 모두 고려
-        #   importance_i = 평균_j attn(i->j) + 평균_j attn(j->i)
-        out_importance = attn_mean.mean(dim=1)  # (N,)
-        in_importance = attn_mean.mean(dim=0)   # (N,)
-        importance = (out_importance + in_importance) * 0.5  # (N,)
-
-        # softmax로 normalize (N,)
-        weights = F.softmax(importance, dim=0).unsqueeze(1)  # (N, 1)
-
-        # 가중합 pooling
-        graph_feat = (weights * node_feats).sum(dim=0)       # (C,)
-
+        # ★ 주의: attn_weights는 무시하고 그냥 mean
+        graph_feat = node_feats.mean(dim=0)  # (C,)
         return graph_feat
 
     # ----------------------------------------------------
@@ -110,20 +81,21 @@ class DetGraphHead(BaseModule):
         Args:
             node_feats (Tensor): (N_nodes, C)
             attn_weights (Tensor, optional): (H, N_nodes, N_nodes)
+                - 여기선 완전히 무시됨.
 
         Returns:
             logits (Tensor): (1, num_classes)
         """
-        # 1) node-level -> graph-level pooling
+        # 1) mean pooling
         graph_feat = self._pool_graph(node_feats, attn_weights)  # (C,)
 
-        # 2) MLP -> logits
+        # 2) MLP → logits
         x = self.fc1(graph_feat)
         x = self.act(x)
         x = self.drop(x)
-        logits = self.fc2(x)        # (num_classes,)
+        logits = self.fc2(x)          # (num_classes,)
 
-        # DetGraph쪽 인터페이스 맞추기 위해 (1, num_classes)로 reshape
+        # DetGraph 인터페이스에 맞춰 (1, num_classes)
         return logits.unsqueeze(0)
 
     # ----------------------------------------------------
@@ -135,7 +107,7 @@ class DetGraphHead(BaseModule):
         labels: Tensor,
         attn_weights: Optional[Tensor] = None
     ) -> Dict[str, Tensor]:
-        """Video-level classification loss.
+        """Video-level classification loss (CE).
 
         Args:
             node_feats (Tensor): (N_nodes, C)
@@ -145,7 +117,7 @@ class DetGraphHead(BaseModule):
         Returns:
             dict: {'loss_ce': scalar Tensor}
         """
-        logits = self.forward(node_feats, attn_weights=attn_weights)  # (1, num_classes)
+        logits = self.forward(node_feats, attn_weights=attn_weights)
 
         # labels shape 정리
         if labels.dim() == 0:
@@ -154,7 +126,6 @@ class DetGraphHead(BaseModule):
             labels = labels.view(-1)
 
         loss_ce = F.cross_entropy(logits, labels)
-
         return dict(loss_ce=loss_ce)
 
     # ----------------------------------------------------
@@ -174,5 +145,4 @@ class DetGraphHead(BaseModule):
         Returns:
             logits (Tensor): (1, num_classes)
         """
-        logits = self.forward(node_feats, attn_weights=attn_weights)
-        return logits
+        return self.forward(node_feats, attn_weights=attn_weights)

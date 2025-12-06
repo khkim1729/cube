@@ -22,6 +22,9 @@ class DetGraph(BaseVideoDetector):
     - DetGraph는 각 프레임별로 대표 proposal 1개씩을 선택하여
       (최대 T개 노드의) 완전연결 그래프를 구성하고,
       이를 graph_head에 넣어 video-level classification 수행
+    - phase embedding이 켜져 있을 경우:
+      RoIAlign 이후, BBoxHead shared FC 전에 RoI feature에 phase embedding이
+      결합되며, DetGraph는 그 위에 얹힌 graph head만 다룬다.
     """
 
     def __init__(self,
@@ -60,7 +63,12 @@ class DetGraph(BaseVideoDetector):
     # TrackDataSample → frame-level DetDataSamples
     # ----------------------------------------------------
     def _split_track_to_frames(self, track_sample, num_frames: int):
-        """TrackDataSample 하나를 프레임 단위로 분리."""
+        """TrackDataSample 하나를 프레임 단위로 분리.
+
+        - gt_instances.bboxes / labels / instances_id를 frame별로 잘라서 재구성
+        - metainfo 내 길이 T인 리스트(phase, phase_id, frame_id 등)는
+          t번째 값만 남기도록 슬라이스
+        """
         gt = track_sample.gt_instances
         assert hasattr(gt, "map_instances_to_img_idx")
 
@@ -259,7 +267,8 @@ class DetGraph(BaseVideoDetector):
             node_feats_graph, attn_graph = self._build_graph_inputs(num_frames=T)
 
             # video-level label
-            video_label = track_sample.metainfo.get("video_label", None)
+            track_meta = track_sample.metainfo
+            video_label = track_meta.get("video_label", None)
 
             if (node_feats_graph is not None) and (video_label is not None):
                 # 1) 리스트/튜플인 경우 → 첫 원소만 사용 (영상당 라벨 1개라고 가정)
