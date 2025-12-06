@@ -1,4 +1,4 @@
-_base_ = ['./detgraph_faster-rcnn_r50-dc5_1xb1-30e_ceusdgvid.py']
+_base_ = ['./detgraph_faster-rcnn_r50-dc5_1xb8-500e_ceusdgvid_attn.py']
 model = dict(
     detector=dict(
         backbone=dict(
