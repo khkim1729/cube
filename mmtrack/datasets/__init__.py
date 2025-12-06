@@ -19,6 +19,7 @@ from .vot_dataset import VOTDataset
 from .youtube_vis_dataset import YouTubeVISDataset
 from .ceus_vid_dataset import CeusVIDDataset
 from .ceus_c1_vid_dataset import CeusC1VIDDataset
+from .ceus_c2_vid_dataset import CeusC2VIDDataset
 from .ceus_dg_vid_dataset import CeusDGVIDDataset
 
 __all__ = [
@@ -28,5 +29,5 @@ __all__ = [
     'ImagenetVIDDataset', 'RandomSampleConcatDataset', 'TaoDataset',
     'UAV123Dataset', 'VOTDataset', 'OTB100Dataset', 'DanceTrackDataset',
     'VideoSampler', 'QuotaSampler', 'EntireVideoBatchSampler',
-    'CeusVIDDataset', 'CeusC1VIDDataset', 'CeusDGVIDDataset'
+    'CeusVIDDataset', 'CeusC1VIDDataset', 'CeusC2VIDDataset', 'CeusDGVIDDataset'
 ]
