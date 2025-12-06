@@ -24,6 +24,10 @@ AUG_DIRNAME    = "aug"
 CATEGORIES = [{"id": 1, "name": "lesion"}]
 CAT2ID = {"FNH": 1, "HCC": 1}
 
+# Phase 매핑 (AP=0, PP, LP=1, KP=2)
+PHASE2ID = {"AP": 0, "PP": 1, "LP": 1, "KP": 2}
+UNKNOWN_PHASE_ID = -1  # 유효하지 않은 phase에 대한 값
+
 # 유틸 함수
 def load_meta(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
@@ -76,13 +80,20 @@ def to_cocovid(entries: List[Dict[str, Any]], include_folds: List[int]) -> Dict[
                 cat, pid, phase_dir, fname
             ).replace("\\", "/")
 
+            # Phase ID 변환 (AP=0, PP, LP=1, KP=2)
+            phase_id = PHASE2ID.get(phase, UNKNOWN_PHASE_ID)
+
+            # 유효성 플래그: blank.png이거나 phase가 유효하지 않으면 invalid
+            is_valid = not is_blank(fname) and phase_id != UNKNOWN_PHASE_ID
+
             images.append({
                 "id": img_id,
                 "file_name": rel_path,
                 "height": IMG_H, "width": IMG_W,
                 "frame_id": t, "video_id": vid_id,
-                "pid": pid, "phase": phase, "fold": fold,
+                "pid": pid, "phase": phase, "phase_id": phase_id, "fold": fold,
                 "is_aug": bool(aug_flag),
+                "is_valid": is_valid,
                 "t1_min": t1_min[t] if t < len(t1_min) else None,
                 "t1_sec": t1_sec[t] if t < len(t1_sec) else None
             })
