@@ -9,21 +9,38 @@ from mmengine.model import BaseModule
 from mmtrack.registry import MODELS
 from mmtrack.utils import OptConfigType
 
-# ★ PyTorch Geometric
-from torch_geometric.nn import GCNConv
+
+class SimpleGCNLayer(nn.Module):
+    """한 층짜리 GCN: H' = σ(Â H W).
+
+    - x: (N, C_in)
+    - adj: (N, N)  (row-normalized adjacency)
+    - out: (N, C_out)
+    """
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.lin = nn.Linear(in_channels, out_channels)
+
+    def forward(self, x: Tensor, adj: Tensor) -> Tensor:
+        # 1) 선형 변환
+        x = self.lin(x)          # (N, C_out)
+        # 2) 인접 행렬을 통한 aggregation
+        x = adj @ x              # (N, C_out)
+        # 3) 비선형
+        return F.relu(x)
 
 
 @MODELS.register_module()
 class DetGraphGCNHead(BaseModule):
-    """PyG GCNConv + global pooling 기반 video-level graph head.
+    """GCN + global pooling 기반 video-level graph head (PyG 없이 구현).
 
     Inputs:
         - node_feats: (N_nodes, C)
         - attn_weights (optional): (H, N_nodes, N_nodes)
 
     동작:
-        1) attn_weights → soft adjacency (N,N) → edge_index (2,E), edge_weight (E,)
-        2) GCNConv stack 돌림
+        1) attn_weights → soft adjacency (N,N)
+        2) GCN layer stack(SimpleGCNLayer) 돌림
         3) global mean pooling → graph_feat
         4) FC → logits (1, num_classes)
     """
@@ -46,12 +63,12 @@ class DetGraphGCNHead(BaseModule):
         self.dropout = dropout
 
         # -----------------------------
-        # GCN stack (PyG GCNConv)
+        # GCN stack (SimpleGCNLayer)
         # -----------------------------
         gcn_list = []
         in_c = in_channels
         for _ in range(gcn_layers):
-            gcn_list.append(GCNConv(in_c, hidden_channels))
+            gcn_list.append(SimpleGCNLayer(in_c, hidden_channels))
             in_c = hidden_channels
         self.gcn = nn.ModuleList(gcn_list)
 
@@ -62,38 +79,40 @@ class DetGraphGCNHead(BaseModule):
         self.drop = nn.Dropout(dropout)
 
     # ----------------------------------------------------
-    # attn_weights → edge_index, edge_weight
+    # attn_weights → adjacency (row-normalized)
     # ----------------------------------------------------
-    def _build_edges(
+    def _build_adj(
         self,
         attn_weights: Optional[Tensor],
         N: int,
         device: torch.device
-    ) -> (Tensor, Optional[Tensor]):
-        """attn_weights(H,N,N) 를 PyG용 edge_index, edge_weight로 변환.
+    ) -> Tensor:
+        """attn_weights(H,N,N)를 adjacency(N,N)로 변환.
 
-        edge_index: (2, E)
-        edge_weight: (E,) or None
+        - attn 없으면: fully-connected uniform 그래프 (self-loop 포함)
+        - attn 있으면:
+            * head 평균 → (N,N)
+            * 대칭화 (i->j, j->i 반영)
+            * self-loop 추가
+            * row-normalization
         """
         if attn_weights is None:
-            # attn 없으면 fully-connected uniform 그래프
+            # attn 없으면 fully-connected uniform 그래프로 가정
             adj = torch.ones(N, N, device=device)
         else:
-            # head 평균 후 대칭화 (i->j, j->i 모두 반영)
+            # head 평균 후 대칭화
             attn_mean = attn_weights.mean(dim=0)              # (N, N)
             adj = 0.5 * (attn_mean + attn_mean.transpose(0, 1))
 
-        # self-loop 추가 (GCNConv도 self-loop를 추가할 수 있지만,
-        # 여기선 확실히 포함해 둠)
+        # self-loop 추가
         eye = torch.eye(N, device=device)
         adj = adj + eye
 
-        # 완전 dense 그래프 → 모든 nonzero edge 사용
-        # (CEUS에서 N ≤ 16 정도라 N^2 edge도 부담 없음)
-        edge_index = adj.nonzero(as_tuple=False).t()          # (2, E)
-        edge_weight = adj[edge_index[0], edge_index[1]]       # (E,)
+        # row-normalize
+        row_sum = adj.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        adj_norm = adj / row_sum                             # (N, N)
 
-        return edge_index.long(), edge_weight
+        return adj_norm
 
     # ----------------------------------------------------
     # 1) node-level -> graph-level logits
@@ -112,25 +131,24 @@ class DetGraphGCNHead(BaseModule):
 
         device = node_feats.device
 
-        # PyG용 edge_index, edge_weight 구성
-        edge_index, edge_weight = self._build_edges(attn_weights, N, device)
+        # adjacency(Â) 구성
+        adj = self._build_adj(attn_weights, N, device)       # (N, N)
 
         # -----------------------------
-        # GCNConv layers
+        # GCN layers
         # -----------------------------
         x = node_feats
-        for conv in self.gcn:
-            x = conv(x, edge_index, edge_weight)   # (N, hidden)
-            x = F.relu(x)
+        for layer in self.gcn:
+            x = layer(x, adj)                                # (N, hidden)
 
         # -----------------------------
         # global mean pooling
         # -----------------------------
-        graph_feat = x.mean(dim=0)                 # (hidden,)
+        graph_feat = x.mean(dim=0)                           # (hidden,)
         graph_feat = self.drop(graph_feat)
-        logits = self.fc(graph_feat)               # (num_classes,)
+        logits = self.fc(graph_feat)                         # (num_classes,)
 
-        return logits.unsqueeze(0)                 # (1, num_classes)
+        return logits.unsqueeze(0)                           # (1, num_classes)
 
     # ----------------------------------------------------
     # 2) loss / predict
