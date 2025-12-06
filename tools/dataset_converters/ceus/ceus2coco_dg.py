@@ -10,6 +10,7 @@ DATA_ROOT      = "data/CEUS"
 OUT_DIR        = os.path.join(DATA_ROOT, "annotations")
 OUT_TRAIN      = "ceus_dg_train.json"
 OUT_VAL        = "ceus_dg_val.json"
+OUT_TEST       = "ceus_dg_test.json"
 
 META_ORG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding.json")
 META_AUG_PATH  = os.path.join(DATA_ROOT, "Annotations", "post_padding_aug.json")
@@ -146,6 +147,7 @@ def main():
     ALL_FOLDS = {0, 1, 2, 3, 4}
     train_folds = sorted(list(ALL_FOLDS - {VAL_FOLD, TEST_FOLD}))
     val_folds   = [VAL_FOLD]
+    test_folds  = [TEST_FOLD]
 
     print(f"Train folds: {train_folds}, Val fold: {VAL_FOLD}, Test fold: {TEST_FOLD}")
 
@@ -166,6 +168,15 @@ def main():
         json.dump(coco_val, f, ensure_ascii=False)
     print(f"[OK] {OUT_VAL} → {out_val}")
     print(f"  videos={len(coco_val['videos'])}, images={len(coco_val['images'])}, anns={len(coco_val['annotations'])}")
+
+    # ----- Test -----
+    test_entries = meta_org + meta_aug
+    coco_test = to_cocovid(test_entries, include_folds=test_folds)
+    out_test = os.path.join(OUT_DIR, OUT_TEST)
+    with open(out_test, "w", encoding="utf-8") as f:
+        json.dump(coco_test, f, ensure_ascii=False)
+    print(f"[OK] {OUT_TEST} → {out_test}")
+    print(f"  videos={len(coco_test['videos'])}, images={len(coco_test['images'])}, anns={len(coco_test['annotations'])}")
 
 if __name__ == "__main__":
     main()
