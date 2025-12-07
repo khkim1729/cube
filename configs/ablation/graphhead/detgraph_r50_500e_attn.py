@@ -1,9 +1,8 @@
 _base_ = [
     '../../_base_/models/faster-rcnn_r50-dc5.py',
     '../../_base_/datasets/ceus_vid_detgraph_style.py',
-    '../../_base_/default_runtime.py'
+    '../../_base_/detgraph_runtime.py'
 ]
-
 model = dict(
     type='mmtrack.DetGraph',
     detector=dict(
@@ -53,7 +52,7 @@ model = dict(
 
     # graph_head
     graph_head=dict(
-        type='mmtrack.DetGraphGCNHead',
+        type='mmtrack.DetGraphAttnHead',
         in_channels=1024,
         num_classes=2,
         hidden_channels=256,
@@ -100,7 +99,7 @@ visualizer = dict(
     type='DetGraphLocalVisualizerOverlay',
     name='visualizer',
     vis_backends=vis_backends,
-    save_dir=None
+    # save_dir=None
 )
 
 custom_hooks = [
