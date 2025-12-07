@@ -18,13 +18,14 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
     - shared FC 블록 이후에 self-attention 기반 Aggregator 한 번 태움
     - ref_x 없이, (N, C) proposal feature들끼리 self-attention
     - (옵션) phase embedding을 proposal feature에 주입
+    - (옵션) time embedding(frame_in_phase)을 proposal feature에 주입
     - (옵션) frame_ids를 aggregator에 넘겨서 frame 단위 마스킹 등 구현 가능
 
     Args:
         aggregator (ConfigType): DetGraphAggregator 설정.
             예시:
             aggregator = dict(
-                type='DetGraphAggregator',
+                type='DetGraphAggregatorDetachCA',
                 in_channels=1024,
                 num_attention_blocks=8,
             )
@@ -36,6 +37,11 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
             - 'concat': [x, phase_emb] concat 후 Linear로 fc_out_channels 로 투영
             - 'add':    x와 phase_emb를 같은 차원에서 elementwise add
         unknown_phase_id (int): 유효하지 않은 phase (예: -1) 표시용 id.
+
+        use_time_embed (bool): time embedding(frame_in_phase) 사용 여부.
+        num_time_steps (int): time embedding 테이블 크기 (최대 frame_in_phase+1).
+        time_embed_dim (int): time embedding 차원.
+        time_fusion_mode (str): 'concat' 또는 'add'.
     """
 
     def __init__(
@@ -46,6 +52,12 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
         phase_embed_dim: int = 32,
         phase_fusion_mode: str = 'concat',  # or 'add'
         unknown_phase_id: int = -1,
+        # ---- 여기부터 time embedding 옵션 ----
+        use_time_embed: bool = False,
+        num_time_steps: int = 16,
+        time_embed_dim: int = 16,
+        time_fusion_mode: str = 'concat',   # or 'add'
+        # -------------------------------------
         *args,
         **kwargs
     ):
@@ -86,6 +98,36 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
             self.phase_fuse = None
 
         # -----------------------------
+        # 0-1) Time Embedding 설정 (frame_in_phase)
+        # -----------------------------
+        self.use_time_embed = use_time_embed
+        self.num_time_steps = num_time_steps
+        self.time_embed_dim = time_embed_dim
+        self.time_fusion_mode = time_fusion_mode
+
+        if self.use_time_embed:
+            assert self.time_fusion_mode in ('concat', 'add'), \
+                f'time_fusion_mode must be "concat" or "add", got {self.time_fusion_mode}'
+
+            # frame_in_phase ∈ [0, num_time_steps-1] 를 위한 embedding
+            self.time_embed = nn.Embedding(num_time_steps, time_embed_dim)
+
+            if self.time_fusion_mode == 'concat':
+                self.time_fuse = nn.Linear(
+                    self.fc_out_channels + time_embed_dim,
+                    self.fc_out_channels
+                )
+            else:
+                # 'add' 모드: 동일 차원에서 더해야 하므로 dim 일치 필요
+                assert time_embed_dim == self.fc_out_channels, \
+                    f'add fusion requires time_embed_dim({time_embed_dim}) ' \
+                    f'== fc_out_channels({self.fc_out_channels})'
+                self.time_fuse = None
+        else:
+            self.time_embed = None
+            self.time_fuse = None
+
+        # -----------------------------
         # 1) Aggregator 설정
         # -----------------------------
         # aggregator가 주어졌고 shared FC가 있을 때만 사용
@@ -113,6 +155,7 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
         x: Tensor,
         phase_ids: Optional[Tensor] = None,
         frame_ids: Optional[Tensor] = None,
+        time_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         """RoI feature로부터 cls_score / bbox_pred 계산.
 
@@ -123,7 +166,10 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 - 0~num_phases-1: 유효 phase
                 - unknown_phase_id (기본 -1): invalid (embedding 안 쓰거나 zero로 처리)
             frame_ids (Tensor, optional): (N,)
-                - 각 RoI가 속한 frame index (DetGraphAggregatorDetachMasked에서 사용)
+                - 각 RoI가 속한 frame index (DetGraphAggregatorDetachCA에서 사용)
+            time_ids (Tensor, optional): (N,)
+                - 각 RoI가 속한 frame의 phase 내부 index (frame_in_phase)
+                - 0~num_time_steps-1: 유효, 그 외/음수는 invalid로 처리
 
         Returns:
             tuple:
@@ -138,7 +184,7 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 x = conv(x)
 
         # -------------------------
-        # 2) shared FCs + (phase embed) + aggregator
+        # 2) shared FCs + (phase embed) + (time embed) + aggregator
         # -------------------------
         if self.num_shared_fcs > 0:
             # ConvFCBBoxHead 기본 구조와 동일
@@ -178,10 +224,32 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 # valid 하나도 없으면 phase 정보는 그냥 스킵
 
             # -------------------------
-            # 2-2) self-attention aggregator (SELSA-style residual)
+            # 2-2) Time embedding(frame_in_phase) 주입
+            # -------------------------
+            if self.use_time_embed and (time_ids is not None):
+                # time_ids: (N,)
+                # 음수 or 범위 밖은 invalid로 보고 zero 처리
+                valid_t = (time_ids >= 0) & (time_ids < self.num_time_steps)
+                if valid_t.any():
+                    time_ids_clamped = time_ids.clone()
+                    time_ids_clamped[~valid_t] = 0
+                    time_emb = self.time_embed(time_ids_clamped)  # (N, Dt)
+
+                    # invalid 위치는 0으로
+                    time_emb = time_emb * valid_t.unsqueeze(1).to(time_emb.dtype)
+
+                    if self.time_fusion_mode == 'concat':
+                        x = torch.cat([x, time_emb], dim=1)  # (N, F + Dt)
+                        x = self.time_fuse(x)                # (N, F)
+                    else:  # 'add'
+                        x = x + time_emb
+                # valid 하나도 없으면 time 정보는 그냥 스킵
+
+            # -------------------------
+            # 2-3) self-attention aggregator (SELSA-style residual)
             # -------------------------
             if self.use_aggregator:
-                # DetGraphAggregator / DetGraphAggregatorDetachMasked:
+                # DetGraphAggregator / DetGraphAggregatorDetachCA:
                 # (N, C) -> (N, C), (H, N, N)
                 agg_out, attn = self.aggregator(
                     x, frame_ids=frame_ids, return_attn=True

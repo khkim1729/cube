@@ -60,17 +60,18 @@ class DetGraphRoIHead(StandardRoIHead):
         return phase_ids  # (N,)
 
     # ------------------------------------------------
-    # helper: rois -> frame_ids (per RoI)
+    # helper: rois -> frame_ids (per RoI, GLOBAL frame index)
     # ------------------------------------------------
     def _build_frame_ids_for_rois(
         self,
         rois: Tensor,                 # (N, 5), 첫 열이 batch_idx
         data_samples: SampleList      # len = batch_size (여기선 frame 개수)
     ) -> Optional[Tensor]:
-        """각 RoI가 속한 frame의 frame_id를 (N,) Tensor로 만든다.
+        """각 RoI가 속한 frame의 *전역* frame_id를 (N,) Tensor로 만든다.
 
         - 반드시 data_sample.metainfo['frame_id']가 있어야 한다.
         - 없으면 assert로 강하게 실패시킴
+        - DetGraphAggregatorDetachCA의 same-frame masking에서 사용.
         """
         if rois.numel() == 0:
             return None
@@ -100,6 +101,63 @@ class DetGraphRoIHead(StandardRoIHead):
             device=rois.device
         )
         return frame_ids  # (N,)
+
+    # ------------------------------------------------
+    # helper: rois -> time_ids (per RoI, frame index *within phase*)
+    # ------------------------------------------------
+    def _build_time_ids_for_rois(
+        self,
+        rois: Tensor,                 
+        data_samples: SampleList      
+    ) -> Optional[Tensor]:
+
+        # time embedding 사용 안 하면 스킵
+        if not getattr(self.bbox_head, 'use_time_embed', False):
+            return None
+
+        if rois.numel() == 0:
+            return None
+
+        time_list = []
+        batch_inds = rois[:, 0].long()  # (N,)
+
+        for b in batch_inds:
+            meta = data_samples[int(b)].metainfo
+
+            # 반드시 있어야 하는 값
+            assert 'frame_id' in meta, "frame_id missing in metainfo"
+            assert 'phase_id' in meta, "phase_id missing in metainfo"
+
+            fid = meta['frame_id']
+            pid = meta['phase_id']
+
+            # ----------------------------------------
+            # (A) blank.png → pid = -1 → time_id = -1
+            #     → bbox_head.forward에서 embedding 0으로 처리됨
+            # ----------------------------------------
+            if pid < 0:
+                time_list.append(-1)
+                continue
+
+            # ----------------------------------------
+            # (B) 정상 phase → frame_in_phase 계산
+            # ----------------------------------------
+            if pid == 0:  # AP
+                assert 0 <= fid <= 11, f"AP frame_id out of range: {fid}"
+                time_list.append(fid)
+
+            elif pid == 1:  # PP/LP
+                assert 12 <= fid <= 14, f"PP/LP frame_id out of range: {fid}"
+                time_list.append(fid - 12)
+
+            elif pid == 2:  # KP
+                assert fid == 15, f"KP frame_id must be 15, got {fid}"
+                time_list.append(0)
+
+            else:
+                raise ValueError(f"Invalid phase_id {pid}")
+
+        return torch.tensor(time_list, dtype=torch.long, device=rois.device)
 
     # ------------------------------------------------
     # TRAIN
@@ -175,20 +233,27 @@ class DetGraphRoIHead(StandardRoIHead):
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)
 
-        # 3) phase embedding용 phase_ids / aggregator용 frame_ids 구성
+        # 3) phase embedding용 phase_ids /
+        #    aggregator masking용 frame_ids /
+        #    time embedding용 time_ids 구성
         if data_samples is not None:
             phase_ids = self._build_phase_ids_for_rois(rois, data_samples)
             frame_ids = self._build_frame_ids_for_rois(rois, data_samples)
+            time_ids = self._build_time_ids_for_rois(rois, data_samples)
         else:
             phase_ids = None
             frame_ids = None
+            time_ids = None
 
-        # 4) BBox head (phase_ids / frame_ids는 선택적으로 전달)
-        #    DetGraphBBoxHead.forward(x, phase_ids=None, frame_ids=None) 형태를 가정
+        # 4) BBox head
+        #    DetGraphBBoxHead.forward(
+        #        x, phase_ids=None, frame_ids=None, time_ids=None
+        #    ) 형태를 가정
         cls_score, bbox_pred = self.bbox_head(
             bbox_feats,
             phase_ids=phase_ids,
-            frame_ids=frame_ids
+            frame_ids=frame_ids,
+            time_ids=time_ids
         )
 
         return dict(
@@ -228,7 +293,7 @@ class DetGraphRoIHead(StandardRoIHead):
                 rescale: bool = False):
 
         rois = bbox2roi([res.bboxes for res in rpn_results_list])
-        # test에서도 phase embedding / frame_ids 동일하게 사용
+        # test에서도 phase embedding / frame_ids / time_ids 동일하게 사용
         bbox_results = self._bbox_forward(x, rois, data_samples=data_samples)
 
         # loss()에서 쓰는 것과 동일하게 캐시

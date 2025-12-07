@@ -323,18 +323,18 @@ class DetGraph(BaseVideoDetector):
             feats, proposal_list, frame_samples, rescale=rescale
         )
 
-        # ★★★ 여기 디버그 추가 ★★★
-        for ti, preds in enumerate(results_list):
-            bboxes = preds.bboxes
-            scores = preds.scores
-            labels = preds.labels
-            print(
-                f"[DEBUG DetGraph.predict] frame {ti}: "
-                f"#boxes={bboxes.shape[0]}, "
-                f"score_min={scores.min().item() if bboxes.shape[0] > 0 else 'NA'}, "
-                f"score_max={scores.max().item() if bboxes.shape[0] > 0 else 'NA'}, "
-                f"labels_unique={labels.unique().tolist() if bboxes.shape[0] > 0 else []}"
-            )
+        # # ★★★ 여기 디버그 추가 ★★★
+        # for ti, preds in enumerate(results_list):
+        #     bboxes = preds.bboxes
+        #     scores = preds.scores
+        #     labels = preds.labels
+        #     print(
+        #         f"[DEBUG DetGraph.predict] frame {ti}: "
+        #         f"#boxes={bboxes.shape[0]}, "
+        #         f"score_min={scores.min().item() if bboxes.shape[0] > 0 else 'NA'}, "
+        #         f"score_max={scores.max().item() if bboxes.shape[0] > 0 else 'NA'}, "
+        #         f"labels_unique={labels.unique().tolist() if bboxes.shape[0] > 0 else []}"
+        #     )
         
         out = []
         for fs, preds in zip(frame_samples, results_list):
