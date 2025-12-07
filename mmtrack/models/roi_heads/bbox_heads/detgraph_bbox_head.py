@@ -18,6 +18,7 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
     - shared FC 블록 이후에 self-attention 기반 Aggregator 한 번 태움
     - ref_x 없이, (N, C) proposal feature들끼리 self-attention
     - (옵션) phase embedding을 proposal feature에 주입
+    - (옵션) frame_ids를 aggregator에 넘겨서 frame 단위 마스킹 등 구현 가능
 
     Args:
         aggregator (ConfigType): DetGraphAggregator 설정.
@@ -110,7 +111,8 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
     def forward(
         self,
         x: Tensor,
-        phase_ids: Optional[Tensor] = None
+        phase_ids: Optional[Tensor] = None,
+        frame_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         """RoI feature로부터 cls_score / bbox_pred 계산.
 
@@ -120,6 +122,8 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 - 각 RoI가 속한 frame의 phase_id
                 - 0~num_phases-1: 유효 phase
                 - unknown_phase_id (기본 -1): invalid (embedding 안 쓰거나 zero로 처리)
+            frame_ids (Tensor, optional): (N,)
+                - 각 RoI가 속한 frame index (DetGraphAggregatorDetachMasked에서 사용)
 
         Returns:
             tuple:
@@ -177,8 +181,11 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
             # 2-2) self-attention aggregator (SELSA-style residual)
             # -------------------------
             if self.use_aggregator:
-                # DetGraphAggregator: (N, C) -> (N, C), (H, N, N)
-                agg_out, attn = self.aggregator(x)
+                # DetGraphAggregator / DetGraphAggregatorDetachMasked:
+                # (N, C) -> (N, C), (H, N, N)
+                agg_out, attn = self.aggregator(
+                    x, frame_ids=frame_ids, return_attn=True
+                )
                 self.last_attn_weights = attn
 
                 # SELSA와 동일한 residual 패턴: x = x + agg(x, ref_x)
@@ -219,7 +226,7 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 x_reg = self.avg_pool(x_reg)
             x_reg = x_reg.flatten(1)
         for fc in self.reg_fcs:
-            x_reg = self.relu(fc(x_reg))
+            x_reg = self.relu(x_reg)
 
         # 최종 헤드
         cls_score = self.fc_cls(x_cls) if self.with_cls else None
