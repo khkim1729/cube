@@ -78,7 +78,7 @@ visualizer = dict(
     type='DetLocalVisualizerOverlay',
     name='visualizer',
     vis_backends=vis_backends,
-    save_dir=None
+    # save_dir=None
 )
 
 # custom_hooks: when to draw
