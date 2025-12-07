@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 from typing import Tuple, Optional
 
 import torch
@@ -24,7 +25,7 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
             aggregator = dict(
                 type='DetGraphAggregator',
                 in_channels=1024,
-                num_heads=8,
+                num_attention_blocks=8,
             )
 
         use_phase_embed (bool): phase embedding 사용 여부.
@@ -154,10 +155,9 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
             if self.use_phase_embed and (phase_ids is not None):
                 # phase_ids: (N,)
                 # unknown_phase_id (ex: -1)는 embedding 안 쓰거나 zero로 처리
-                # 1) 마스크 생성
                 valid = (phase_ids >= 0) & (phase_ids < self.num_phases)
                 if valid.any():
-                    # 2) invalid index는 일단 0으로 클램프 후 나중에 zeroing
+                    # invalid index는 일단 0으로 클램프 후 나중에 zeroing
                     phase_ids_clamped = phase_ids.clone()
                     phase_ids_clamped[~valid] = 0
                     phase_emb = self.phase_embed(phase_ids_clamped)  # (N, D)
@@ -174,22 +174,26 @@ class DetGraphBBoxHead(ConvFCBBoxHead):
                 # valid 하나도 없으면 phase 정보는 그냥 스킵
 
             # -------------------------
-            # 2-2) self-attention aggregator
+            # 2-2) self-attention aggregator (SELSA-style residual)
             # -------------------------
             if self.use_aggregator:
-                # DetGraphAggregator는 (N, C) -> (N, C), (H, N, N)
-                x, attn = self.aggregator(x)
+                # DetGraphAggregator: (N, C) -> (N, C), (H, N, N)
+                agg_out, attn = self.aggregator(x)
                 self.last_attn_weights = attn
+
+                # SELSA와 동일한 residual 패턴: x = x + agg(x, ref_x)
+                x_res = x + agg_out          # (N, C)
+
+                # graph용 node feature는 residual 이후의 feature로 저장
+                self.last_node_feats = x_res
+
+                # 이후 cls/reg branch에 들어가기 전 ReLU
+                x = self.inplace_false_relu(x_res)
             else:
-                # aggregator를 쓰지 않는 경우에도 graph_head에서
-                # 사용할 수 있도록 post-FC feature를 node_feats로 저장
+                # aggregator를 쓰지 않는 경우: shared_fcs 출력 그대로 사용
                 self.last_attn_weights = None
-
-            # graph용 node feature는 aggregator 적용 직후의 x로 통일
-            self.last_node_feats = x  # (N, C)
-
-            # 이후 cls/reg branch에 들어가기 전 ReLU
-            x = self.inplace_false_relu(x)
+                self.last_node_feats = x
+                x = self.inplace_false_relu(x)
 
         # -------------------------
         # 3) cls / reg 분기
