@@ -17,13 +17,13 @@ model = dict(
                 # ★ 여기서 phase embedding on/off 및 세부 설정
                 use_phase_embed=True,      # ← 여기서 켜고 끄면 됨
                 num_phases=3,              # AP, PP/LP, KP
-                phase_embed_dim=8,        # embedding 차원
+                phase_embed_dim=32,        # embedding 차원
                 phase_fusion_mode='concat',  # 'concat' 또는 'add'
                 unknown_phase_id=-1,       # dataset에서 invalid phase id
 
                 # ★ 여기서 time embedding on/off 및 세부 설정
                 use_time_embed=True,           # ← time embedding ON
-                time_embed_dim=4,             # time embedding 차원
+                time_embed_dim=16,             # time embedding 차원
                 time_fusion_mode='concat',     # phase와 동일하게 concat 후 Linear
                 
                 # aggregator 설정
@@ -57,8 +57,14 @@ model = dict(
     ),
 
     # graph_head
-    graph_head=None,          # 그래프 헤드 사용 안 함
-    graph_loss_weight=0.0
+    graph_head=dict(
+        type='mmtrack.DetGraphConcatHead',
+        in_channels=1024,
+        num_classes=2,
+        hidden_channels=256,
+        dropout=0.5,
+    ),
+    graph_loss_weight=0.3
 )
 
 # training schedule: 500 epochs, val every 10

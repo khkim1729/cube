@@ -21,12 +21,18 @@ model = dict(
                 phase_fusion_mode='concat',  # 'concat' 또는 'add'
                 unknown_phase_id=-1,       # dataset에서 invalid phase id
 
+                # ★ 여기서 time embedding on/off 및 세부 설정
+                use_time_embed=True,           # ← time embedding ON
+                time_embed_dim=16,             # time embedding 차원
+                time_fusion_mode='concat',     # phase와 동일하게 concat 후 Linear
+                
                 # aggregator 설정
                 aggregator=dict(
-                    type='mmtrack.DetGraphAggregator',
+                    type='mmtrack.DetGraphAggregatorDetach',
                     in_channels=1024,  # shared FC output dim (fc_out_channels)
                     num_attention_blocks=16
                 )
+                # aggregator=None
             ),
             bbox_roi_extractor=dict(
                 type='mmtrack.SingleRoIExtractor',
@@ -52,14 +58,13 @@ model = dict(
 
     # graph_head
     graph_head=dict(
-        type='mmtrack.DetGraphMeanHead',
+        type='mmtrack.DetGraphAttnHead',
         in_channels=1024,
         num_classes=2,
         hidden_channels=256,
         dropout=0.5,
     ),
-
-    graph_loss_weight=1.0
+    graph_loss_weight=0.3
 )
 
 # training schedule: 500 epochs, val every 10
@@ -105,9 +110,9 @@ visualizer = dict(
 custom_hooks = [
     dict(
         type='DetGraphVisualizationHook',
-        draw=False,
+        draw=True,
         interval=1,
-        score_thr=0.5,
+        score_thr=0.0,
         show=False,
         test_out_dir='vis'
     )

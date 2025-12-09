@@ -24,11 +24,11 @@ model = dict(
                 # ★ 여기서 time embedding on/off 및 세부 설정
                 use_time_embed=False,           # ← time embedding ON
                 time_embed_dim=16,             # time embedding 차원
-                time_fusion_mode='concat',     # phase와 동일하게 concat 후 Linear
+                time_fusion_mode='concat', 
                 
                 # aggregator 설정
                 aggregator=dict(
-                    type='mmtrack.DetGraphAggregatorDetach',
+                    type='mmtrack.DetGraphAggregatorDetachCA',
                     in_channels=1024,  # shared FC output dim (fc_out_channels)
                     num_attention_blocks=16
                 )
