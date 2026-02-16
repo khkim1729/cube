@@ -11,11 +11,11 @@ from .base_video_dataset import BaseVideoDataset
 
 
 @DATASETS.register_module()
-class CeusC2VIDDataset(BaseVideoDataset):
+class CeusHCCVIDDataset(BaseVideoDataset):
     """CEUS VID dataset for video object detection."""
 
     METAINFO = {
-        'CLASSES': ('FNH', 'HCC')
+        'CLASSES': ('HCC')
     }
 
     def __init__(self, *args, **kwargs):

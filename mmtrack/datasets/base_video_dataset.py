@@ -454,6 +454,19 @@ class BaseVideoDataset(BaseDataset):
                         data_info['video_length'] - 1)
             frame_ids = list(range(0, data_info['video_length']))
 
+            # is_valid 여부 추가
+            key_ori_idx = self.valid_data_indices[idx]
+            def _is_valid_frame(fid: int) -> bool:
+                """Check is_valid for a frame_id(fid) in the same video as key."""
+                offset = fid - frame_id
+                cand = self._get_ori_data_info(key_ori_idx + offset)
+                assert 'is_valid' in cand, (
+                    f"[CocoVID] 'is_valid' missing for ref frame. "
+                    f"idx={idx}, key_frame_id={frame_id}, ref_frame_id={fid}, "
+                    f"key_ori_idx={key_ori_idx}, cand_ori_idx={key_ori_idx + offset}"
+                )
+                return bool(cand['is_valid'])
+    
             ref_frame_ids = []
             if method == 'uniform':
                 valid_ids = frame_ids[left:right + 1]
@@ -494,6 +507,9 @@ class BaseVideoDataset(BaseDataset):
                     ref_frame_ids.append(frame_ids[ref_id])
                 data_info['num_left_ref_imgs'] = abs(frame_range[0])
                 data_info['frame_stride'] = stride
+            # all_inclusive_valid 추가
+            elif method == 'all_inclusive_valid':
+                ref_frame_ids = [fid for fid in frame_ids if fid != frame_id and _is_valid_frame(fid)]
             # all_inclusive 추가
             elif method == 'all_inclusive':
                 ref_frame_ids = [fid for fid in frame_ids if fid != frame_id]
@@ -513,10 +529,6 @@ class BaseVideoDataset(BaseDataset):
 
                 ref_data_infos.append(ref_data_info)
 
-            # 첫 프레임: 자기 복제해서 사용
-            if len(ref_data_infos) == 0:
-                ref_data_infos = [data_info.copy()]
-                
             ref_data_infos = sorted(
                 ref_data_infos, key=lambda i: i['frame_id'])
         return [data_info, *ref_data_infos]
