@@ -57,11 +57,15 @@ val_evaluator = dict(
     ann_file=data_root + val_file,
     metric='bbox',
     format_only=False)
-test_evaluator = dict(
-    type='CocoVideoMetric',
-    ann_file=data_root + test_file,
-    metric='bbox',
-    format_only=False)
+test_evaluator = [
+    dict(type='CocoVideoMetric',
+         ann_file=data_root + test_file,
+         metric='bbox',
+         format_only=False),
+    dict(type='PhaseRPNRecall',
+         Ks=(50, 100, 300),
+         iou_thr=0.5)
+]
 
 # training schedule
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=12, val_interval=1)
