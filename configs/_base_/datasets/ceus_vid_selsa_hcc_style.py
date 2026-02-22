@@ -1,5 +1,5 @@
 # dataset settings
-dataset_type = 'CeusC2VIDDataset'
+dataset_type = 'CeusHCCVIDDataset'
 data_root = 'data/CEUS/'
 
 # data pipeline
