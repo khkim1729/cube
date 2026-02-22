@@ -7,8 +7,10 @@ from .sot_metrics import SOTMetric
 from .tao_metrics import TAOMetric
 from .youtube_vis_metrics import YouTubeVISMetric
 from .detgraph_video_metric import DetGraphVideoMetric
+from .phase_rpn_recall import PhaseRPNRecall
 
 __all__ = [
     'ReIDMetrics', 'BaseVideoMetric', 'CocoVideoMetric', 'YouTubeVISMetric',
-    'MOTChallengeMetrics', 'SOTMetric', 'TAOMetric', 'DetGraphVideoMetric'
+    'MOTChallengeMetrics', 'SOTMetric', 'TAOMetric', 'DetGraphVideoMetric',
+    'PhaseRPNRecall'
 ]

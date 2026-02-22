@@ -275,6 +275,19 @@ class SELSA(BaseVideoDetector):
             proposal_list = self.detector.rpn_head.predict(x, data_samples)
             ref_proposals_list = self.detector.rpn_head.predict(
                 ref_x, ref_data_samples)
+            
+            # RPN recall을 확인하기 위해 proposal 뱉기
+            data_samples[0].set_metainfo({'rpn_props': proposal_list[0].bboxes})
+            
+            # top-k 정렬 여부 확인
+            # props0 = proposal_list[0]
+            # if hasattr(props0, 'scores'):
+            #     order = props0.scores.argsort(descending=True)
+            #     rpn_props = props0.bboxes[order]
+            # else:
+            #     rpn_props = props0.bboxes
+            # data_samples[0].set_metainfo({'rpn_props': rpn_props})
+            
         else:
             assert hasattr(data_samples[0], 'ref_proposals')
             proposal_list = data_samples[0].proposals
