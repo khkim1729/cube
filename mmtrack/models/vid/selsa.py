@@ -74,7 +74,20 @@ class SELSA(BaseVideoDetector):
             'SELSA video detectors only support 1 batch size per gpu for now.'
 
         all_imgs = torch.cat((img, ref_img), dim=0)
-        all_x = self.detector.extract_feat(all_imgs)
+        
+        # ref_data_samples
+        ref_data_samples, ref_img_metas = convert_data_sample_type(
+            data_samples[0], num_ref_imgs=len(ref_img))
+        
+        for i in range(len(ref_data_samples)):
+            # ref_img_metas[i] 안에 phase_id가 있어야 함!
+            ref_data_samples[i].set_metainfo(ref_img_metas[i])
+        
+        # key + refs
+        all_data_samples = [data_samples[0]] + ref_data_samples
+        # _detector_extract_feat
+        all_x = self._detector_extract_feat(all_imgs, all_data_samples)
+        
         x = []
         ref_x = []
         for i in range(len(all_x)):
@@ -82,8 +95,6 @@ class SELSA(BaseVideoDetector):
             ref_x.append(all_x[i][1:])
 
         losses = dict()
-        ref_data_samples, _ = convert_data_sample_type(
-            data_samples[0], num_ref_imgs=len(ref_img))
 
         # RPN forward and loss
         if self.detector.with_rpn:
@@ -109,45 +120,28 @@ class SELSA(BaseVideoDetector):
                 ref_proposals.bboxes = data_samples[i].ref_proposals
                 ref_proposals_list.append(ref_proposals)
 
-        roi_losses = self.detector.roi_head.loss(x, ref_x, proposal_list,
-                                                 ref_proposals_list,
-                                                 data_samples, **kwargs)
+        # SelsaRoIHead, SelsaRoIHeadFiLM 둘 다 받을 수 있게
+        roi_head = self.detector.roi_head
+        if hasattr(roi_head, '_accept_ref_data_samples') and roi_head._accept_ref_data_samples:
+            roi_losses = roi_head.loss(x, ref_x, proposal_list, ref_proposals_list, data_samples,
+                                    ref_data_samples=ref_data_samples)
+        else:
+            roi_losses = roi_head.loss(x, ref_x, proposal_list, ref_proposals_list, data_samples)
 
         losses.update(roi_losses)
 
         return losses
 
     def extract_feats(self, img: Tensor, img_metas: dict,
-                      ref_img: Optional[Tensor],
-                      ref_img_metas: Optional[dict]) -> Tuple:
-        """Extract features for `img` during testing.
+                  ref_img: Optional[Tensor],
+                  ref_img_metas: Optional[dict],
+                  data_sample) -> Tuple:
 
-        Args:
-            img (Tensor): of shape (1, C, H, W) encoding input image.
-                Typically these should be mean centered and std scaled.
+        def _clone_with_metainfo(metainfo: dict):
+            ds = deepcopy(data_sample)
+            ds.set_metainfo(metainfo)
+            return ds
 
-            img_metas (dict): list of image information dict where each
-                dict may has: 'img_id', 'img_path',
-                'ori_shape', 'img_shape', 'scale_factor','flip',
-                'flip_direction', 'frame_id', 'is_video_data', 'video_id',
-                'video_length', 'instances'.
-
-            ref_img (Tensor | None): of shape (1, N, C, H, W) encoding input
-                reference images. Typically these should be mean centered and
-                std scaled. N denotes the number of reference images. There
-                may be no reference images in some cases.
-
-            ref_img_metas (list[dict] | None): The list contains image
-                information dict where each dict may has: 'img_id', 'img_path',
-                'ori_shape', 'img_shape', 'scale_factor','flip',
-                'flip_direction', 'frame_id', 'is_video_data', 'video_id',
-                'video_length', 'instances'.
-
-        Returns:
-            tuple(x, img_metas, ref_x, ref_img_metas): x is the multi level
-                feature maps of `img`, ref_x is the multi level feature maps
-                of `ref_img`.
-        """
         frame_id = img_metas.get('frame_id', -1)
         assert frame_id >= 0
         num_left_ref_imgs = img_metas.get('num_left_ref_imgs', -1)
@@ -158,50 +152,68 @@ class SELSA(BaseVideoDetector):
             if frame_id == 0:
                 self.memo = Dict()
                 self.memo.img_metas = ref_img_metas
-                ref_x = self.detector.extract_feat(ref_img)
-                # 'tuple' object (e.g. the output of FPN) does not support
-                # item assignment
+
+                # ref feats
+                ref_data_samples = [_clone_with_metainfo(m) for m in ref_img_metas]
+                ref_x = self._detector_extract_feat(ref_img, ref_data_samples)
+
                 self.memo.feats = []
                 for i in range(len(ref_x)):
                     self.memo.feats.append(ref_x[i])
 
-            x = self.detector.extract_feat(img)
+            # key feats
+            key_data_samples = [_clone_with_metainfo(img_metas)]
+            x = self._detector_extract_feat(img, key_data_samples)
+
             ref_x = self.memo.feats.copy()
             for i in range(len(x)):
                 ref_x[i] = torch.cat((ref_x[i], x[i]), dim=0)
+
             ref_img_metas = self.memo.img_metas.copy()
             ref_img_metas.append(img_metas)
+
         # test with fixed stride
         else:
             if frame_id == 0:
                 self.memo = Dict()
                 self.memo.img_metas = ref_img_metas[0]
-                ref_x = self.detector.extract_feat(ref_img)
-                # 'tuple' object (e.g. the output of FPN) does not support
-                # item assignment
+
+                # ref feats
+                ref_data_samples = [_clone_with_metainfo(m) for m in ref_img_metas[0]]
+                ref_x = self._detector_extract_feat(ref_img, ref_data_samples)
+
                 self.memo.feats = []
-                # the features of img is same as ref_x[i][[num_left_ref_imgs]]
                 x = []
                 for i in range(len(ref_x)):
                     self.memo.feats.append(ref_x[i])
                     x.append(ref_x[i][[num_left_ref_imgs]])
+
             elif frame_id % frame_stride == 0:
                 assert ref_img is not None
                 x = []
-                ref_x = self.detector.extract_feat(ref_img)
+
+                # ref feats
+                ref_data_samples = [_clone_with_metainfo(m) for m in ref_img_metas[0]]
+                ref_x = self._detector_extract_feat(ref_img, ref_data_samples)
+
                 for i in range(len(ref_x)):
                     self.memo.feats[i] = torch.cat(
                         (self.memo.feats[i], ref_x[i]), dim=0)[1:]
                     x.append(self.memo.feats[i][[num_left_ref_imgs]])
+
                 self.memo.img_metas.extend(ref_img_metas[0])
                 self.memo.img_metas = self.memo.img_metas[1:]
+
             else:
+                # no ref
                 assert ref_img is None
-                x = self.detector.extract_feat(img)
+                key_data_samples = [_clone_with_metainfo(img_metas)]
+                x = self._detector_extract_feat(img, key_data_samples)
 
             ref_x = self.memo.feats.copy()
             for i in range(len(x)):
                 ref_x[i][num_left_ref_imgs] = x[i]
+
             ref_img_metas = self.memo.img_metas.copy()
             ref_img_metas[num_left_ref_imgs] = img_metas
 
@@ -261,9 +273,9 @@ class SELSA(BaseVideoDetector):
                 data_sample, num_ref_imgs=len(ref_img))
         else:
             ref_img_metas = None
-
+        
         x, img_metas, ref_x, ref_img_metas = self.extract_feats(
-            img, img_metas, ref_img, ref_img_metas)
+            img, img_metas, ref_img, ref_img_metas, data_sample)
 
         ref_data_samples = [
             deepcopy(data_sample) for _ in range(len(ref_img_metas))
@@ -293,13 +305,18 @@ class SELSA(BaseVideoDetector):
             proposal_list = data_samples[0].proposals
             ref_proposals_list = data_samples[0].ref_proposals
 
-        results_list = self.detector.roi_head.predict(
-            x,
-            ref_x,
-            proposal_list,
-            ref_proposals_list,
-            data_samples,
-            rescale=rescale)
+        roi_head = self.detector.roi_head
+        if hasattr(roi_head, '_accept_ref_data_samples') and roi_head._accept_ref_data_samples:
+            results_list = roi_head.predict(
+                x, ref_x, proposal_list, ref_proposals_list,
+                data_samples, rescale=rescale,
+                ref_data_samples=ref_data_samples
+            )
+        else:
+            results_list = roi_head.predict(
+                x, ref_x, proposal_list, ref_proposals_list,
+                data_samples, rescale=rescale
+            )
 
         track_data_sample = deepcopy(data_samples[0])
         track_data_sample.pred_det_instances = results_list[0]
@@ -312,3 +329,15 @@ class SELSA(BaseVideoDetector):
                  **kwargs):
         """Test function with test time augmentation."""
         raise NotImplementedError
+    
+    def _detector_extract_feat(self, imgs, data_samples=None):
+        """Call detector.extract_feat with optional data_samples if supported."""
+        if data_samples is None:
+            return self.detector.extract_feat(imgs)
+
+        # FasterRCNNFiLM처럼 batch_data_samples를 받는 경우만 사용
+        try:
+            return self.detector.extract_feat(imgs, batch_data_samples=data_samples)
+        except TypeError:
+            # 일반 FasterRCNN(인자 1개) 호환
+            return self.detector.extract_feat(imgs)
