@@ -125,3 +125,5 @@ mmtrack/.mim
 # results
 results
 data
+
+rpn_recall_plots/
