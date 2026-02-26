@@ -12,12 +12,6 @@ do
   do
     for fold in {0..4}
     do
-      # skip already done case
-      if [[ "$emb" -eq 8 && "$fold" -eq 0 && "$exp" == "c1" ]]; then
-        echo "Skipping emb=8, fold=0, exp=c1 (already done)"
-        continue
-      fi
-
       SRC=configs/vid/selsa_ceus_film_roi/film_roi-12e_${exp}_fold${fold}.py
       TMP=configs/vid/selsa_ceus_film_roi_tmp/film_roi-12e_${exp}_fold${fold}_emb${emb}.py
       WORKDIR=results/selsa_ceus_film_roi/emb${emb}/film_roi-12e_${exp}_fold${fold}
