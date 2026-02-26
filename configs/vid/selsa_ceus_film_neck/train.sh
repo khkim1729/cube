@@ -4,14 +4,20 @@ set -e
 mkdir -p configs/vid/selsa_ceus_film_neck_tmp
 
 EMBS=(8 16 32 64)
-EXPS=(c1 c2 fnh hcc)
+EXPS=(fnh hcc c1)
 
 for emb in "${EMBS[@]}"
 do
-  for fold in {0..4}
+  for exp in "${EXPS[@]}"
   do
-    for exp in "${EXPS[@]}"
+    for fold in {0..4}
     do
+      # skip already done case
+      if [[ "$emb" -eq 8 && "$fold" -eq 0 && "$exp" == "c1" ]]; then
+        echo "Skipping emb=8, fold=0, exp=c1 (already done)"
+        continue
+      fi
+
       SRC=configs/vid/selsa_ceus_film_neck/film_neck-12e_${exp}_fold${fold}.py
       TMP=configs/vid/selsa_ceus_film_neck_tmp/film_neck-12e_${exp}_fold${fold}_emb${emb}.py
       WORKDIR=results/selsa_ceus_film_neck/emb${emb}/film_neck-12e_${exp}_fold${fold}

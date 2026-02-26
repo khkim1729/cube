@@ -1,3 +1,6 @@
+EMBS=(8)
+EXPS=(fnh hcc c1)
+
 for emb in "${EMBS[@]}"; do
   for fold in {0..4}; do
     for exp in "${EXPS[@]}"; do
