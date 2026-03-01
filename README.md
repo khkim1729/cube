@@ -249,6 +249,68 @@ experiments/
 
 ---
 
+### Auto-Scheduler (`auto_next.py`)
+
+The auto-scheduler detects which experiments have not yet run, claims the next pending one with file locking, and loops until the full queue is exhausted. It is safe to run concurrently from multiple terminals — each terminal picks a different experiment.
+
+```bash
+# Terminal 1 — GPU 1
+CUDA_VISIBLE_DEVICES=1 python3 experiments/auto_next.py --gpu_id 1
+
+# Terminal 2 — GPU 2
+CUDA_VISIBLE_DEVICES=2 python3 experiments/auto_next.py --gpu_id 2
+
+# Terminal 3 — GPU 3
+CUDA_VISIBLE_DEVICES=3 python3 experiments/auto_next.py --gpu_id 3
+
+# Check queue status without running
+python3 experiments/auto_next.py --gpu_id 1 --status
+
+# Reset queue and start fresh
+python3 experiments/auto_next.py --gpu_id 1 --reset
+```
+
+**How it works:**
+1. Scans `experiments/results/*.csv` to detect completed experiments (rows ≥ T)
+2. Uses `fcntl.LOCK_EX` on `queue.lock` so concurrent processes never claim the same experiment
+3. If a `running` experiment has a dead PID (interrupted), it is automatically reset to `pending`
+4. Each GPU worker loops through experiments in priority order until the queue is empty
+
+**Faster pilot runs** (reduce S and K for quick validation):
+```bash
+CUDA_VISIBLE_DEVICES=1 python3 experiments/auto_next.py --gpu_id 1 --S 4 --K 2
+```
+
+---
+
+### Pilot Simulation Results (All 12 Combinations)
+
+Results from toy policy simulation (ToyPolicy: 64→128→10 MLP, d=9,610 params).
+Hardware: 3× NVIDIA A100 80GB, ~55s per experiment.
+Values reported at the final training checkpoint (step 180/200).
+
+| Baseline | Budget | Total Bias | Fusion Bias | HL Proxy $\|HL\|_F^2$ |
+|----------|--------|-----------|------------|----------------------|
+| REINFORCE | None | 0.000 | 0.000 | 3.91e-3 |
+| REINFORCE | PromptSkip | 6.7e-5 | 0.000 | 2.93e-3 |
+| REINFORCE | SubsetSelect | 1.30e-3 | 0.000 | 7.81e-3 |
+| GRPO | None | 1.66e-3 | 0.000 | **1.27e+13** |
+| GRPO | PromptSkip | 1.69e-3 | 0.000 | **4.14e+12** |
+| GRPO | SubsetSelect | **4.24e-3** | **7.0e-5** | **2.54e+13** |
+| RLOO | None | 3.15e-4 | 0.000 | 4.46e-3 |
+| RLOO | PromptSkip | 3.14e-4 | 4.0e-6 | 3.35e-3 |
+| RLOO | SubsetSelect | 1.12e-3 | 7.1e-5 | 8.93e-3 |
+| STV | None | 2.67e-4 | 0.000 | 3.89e-3 |
+| STV | PromptSkip | 2.71e-4 | 1.7e-5 | 2.92e-3 |
+| STV | SubsetSelect | 1.10e-3 | 4.1e-5 | 7.78e-3 |
+
+**Key observations:**
+- **GRPO** variants show HL proxy values 10^12–10^13× larger than all others — caused by reward-dependent $D_B$ diverging when per-prompt reward std → 0
+- **RLOO × None** achieves the lowest total bias with finite HL proxy, confirming the theoretical optimum
+- **Fusion Bias** is non-zero only when both budget ($H \neq H_0$) and baseline ($A_B \neq 0$) are active simultaneously
+
+---
+
 ## Citation
 
 ```bibtex

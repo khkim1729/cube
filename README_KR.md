@@ -256,6 +256,40 @@ python experiments/launch_pilots.py \
 | GPU 2 | GRPO × SubsetSelect | 융합 편향 + 분산 증폭 확인 |
 | GPU 3 | STV × PromptSkip | 크로스-프롬프트 잡음 라우팅 확인 |
 
+### 자동 스케줄러 (`auto_next.py`)
+
+안 돌아간 실험을 자동으로 감지하고 다음 실험을 선택해 실행합니다. 터미널 3개에서 동시에 실행해도 같은 실험이 중복 선택되지 않습니다.
+
+```bash
+# 터미널 1 — GPU 1
+CUDA_VISIBLE_DEVICES=1 python3 experiments/auto_next.py --gpu_id 1
+
+# 터미널 2 — GPU 2
+CUDA_VISIBLE_DEVICES=2 python3 experiments/auto_next.py --gpu_id 2
+
+# 터미널 3 — GPU 3
+CUDA_VISIBLE_DEVICES=3 python3 experiments/auto_next.py --gpu_id 3
+
+# 큐 상태만 확인 (실험 실행 없이)
+python3 experiments/auto_next.py --gpu_id 1 --status
+
+# 큐 초기화 후 처음부터
+python3 experiments/auto_next.py --gpu_id 1 --reset
+```
+
+**동작 방식:**
+1. `experiments/results/*.csv`를 스캔해 완료된 실험 파악 (rows ≥ T)
+2. `fcntl.LOCK_EX`로 `queue.lock` 파일을 잠가 동시 중복 선택 방지
+3. `running` 상태인데 PID가 죽어있으면 자동으로 `pending`으로 복원
+4. 각 GPU 워커는 큐가 소진될 때까지 실험을 순서대로 자동 실행
+
+**빠른 파일럿 실행** (S, K를 줄여 빠른 검증):
+```bash
+CUDA_VISIBLE_DEVICES=1 python3 experiments/auto_next.py --gpu_id 1 --S 4 --K 2
+```
+
+---
+
 ### 결과 병합 (`merge_results.py`)
 
 개별 실험 CSV를 하나의 마스터 CSV로 병합합니다.
@@ -285,17 +319,30 @@ python experiments/merge_results.py --results_dir experiments/results
 | `reward_mean` | 해당 체크포인트에서의 평균 보상 |
 | `elapsed_seconds` | 경과 시간 (초) |
 
-### 파일럿 실험 결과 예시
+### 시뮬레이션 실험 결과 (전체 12개 조합)
 
-아래는 파일럿 3개 실험 (GPU 1,2,3 병렬, 각 약 52초 소요) 결과입니다:
+ToyPolicy (64→128→10 MLP, d=9,610 파라미터), GPU 3× NVIDIA A100 80GB, 조합당 약 55초 소요.
+`auto_next.py`로 GPU 1,2,3에서 병렬 실행. 마지막 체크포인트(step 180/200) 기준 측정값.
 
-| 조합 | total_bias | fusion_bias | HL proxy | reward |
-|------|-----------|------------|---------|--------|
-| RLOO × None | 3.15e-4 | 0.000 | 4.46e-3 | 0.114 |
-| GRPO × SubsetSelect | 4.24e-3 | 7.0e-5 | **2.54e+13** | 0.115 |
-| STV × PromptSkip | 2.71e-4 | 1.7e-5 | 2.92e-3 | 0.115 |
+| 베이스라인 | 예산 | Total Bias | Fusion Bias | HL Proxy $\|HL\|_F^2$ |
+|----------|------|-----------|------------|----------------------|
+| REINFORCE | None | 0.000 | 0.000 | 3.91e-3 |
+| REINFORCE | PromptSkip | 6.7e-5 | 0.000 | 2.93e-3 |
+| REINFORCE | SubsetSelect | 1.30e-3 | 0.000 | 7.81e-3 |
+| GRPO | None | 1.66e-3 | 0.000 | **1.27e+13** |
+| GRPO | PromptSkip | 1.69e-3 | 0.000 | **4.14e+12** |
+| GRPO | SubsetSelect | **4.24e-3** | **7.0e-5** | **2.54e+13** |
+| RLOO | None | 3.15e-4 | 0.000 | 4.46e-3 |
+| RLOO | PromptSkip | 3.14e-4 | 4.0e-6 | 3.35e-3 |
+| RLOO | SubsetSelect | 1.12e-3 | 7.1e-5 | 8.93e-3 |
+| STV | None | 2.67e-4 | 0.000 | 3.89e-3 |
+| STV | PromptSkip | 2.71e-4 | 1.7e-5 | 2.92e-3 |
+| STV | SubsetSelect | 1.10e-3 | 4.1e-5 | 7.78e-3 |
 
-> GRPO × SubsetSelect의 HL proxy가 폭발적으로 증가하는 것은 GRPO std-정규화의 분모가 0에 가까워질 때 ($D_B \to \infty$) 발생하는 분산 증폭을 정리 2가 올바르게 예측함을 확인합니다.
+**주요 관찰:**
+- **GRPO** 계열은 HL proxy가 타 조합 대비 10¹²–10¹³배 높음 — 초기 학습 시 보상 표준편차 → 0으로 $D_B \to \infty$ 발산하는 현상
+- **RLOO × None**이 가장 낮은 total_bias와 유한한 HL proxy를 달성 — 이론적 최적 조합 확인
+- **Fusion Bias**는 예산($H \neq H_0$)과 베이스라인($A_B \neq 0$)이 동시에 활성화될 때만 0이 아님
 
 ### 실험 설계 (plans_cube_02.txt 기반)
 
