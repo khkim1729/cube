@@ -1,0 +1,53 @@
+# CUBE Default Experiment Configuration
+# Reference: plans_cube_02.txt
+
+model: "Qwen/Qwen2-VL-7B-Instruct"
+dataset: "mathvista"
+dataset_split: "testmini"
+
+# Rollout settings
+M: 256          # total rollouts per minibatch
+B: 32           # prompts per minibatch
+N_per_prompt: 8 # default Nj when uniform allocation
+
+# Logging settings (plans_cube_02.txt)
+S: 16           # minibatch sampling repetitions
+K: 8            # rollout resamples per fixed minibatch
+T: 10           # logging checkpoints during training
+R: 32           # probe vector count
+probe_seed: 42
+
+# Training settings
+num_train_steps: 200
+learning_rate: 1.0e-5
+max_new_tokens: 256
+temperature: 1.0
+
+# Device
+device: "cuda"
+output_root: "experiments"
+
+# Baselines to evaluate
+baselines:
+  - reinforce
+  - grpo
+  - rloo
+  - stv
+
+# Budget methods to evaluate
+budgets:
+  - none
+  - prompt_skip
+  - rollout_alloc
+  - subset_select
+
+# Budget hyperparameters
+budget_params:
+  prompt_skip:
+    skip_ratio: 0.25
+    criterion: "variance"
+  rollout_alloc:
+    strategy: "proportional"
+  subset_select:
+    keep_ratio: 0.5
+    criterion: "top_reward"

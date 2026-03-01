@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data & large files
+datasets/raw/
+datasets/cache/
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.parquet
+*.arrow
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip
+*.zst
+
+# Experiment outputs
+experiments/*/checkpoints/
+experiments/*/wandb/
+experiments/*/outputs/
+experiments/**/model_weights/
+*.log
+
+# Wandb / MLflow
+wandb/
+mlruns/
+mlflow/
+
+# HuggingFace cache
+.cache/
+~/.cache/huggingface/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets / credentials
+.env
+*.env
+secrets.yaml
+secrets.json
+
+# Results (keep analysis scripts, not raw dumps)
+results/raw/
