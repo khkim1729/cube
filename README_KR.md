@@ -196,31 +196,108 @@ pip install -r requirements.txt
 
 # 3. 데이터셋 다운로드
 python datasets/download.py --dataset mathvista --split testmini
-
-# 4. 편향/분산 스윕 실행 (dry run, GPU 불필요)
-python experiments/run_experiment.py --dry_run
-
-# 5. 사용자 정의 설정으로 실행
-python experiments/run_experiment.py --config configs/default.yaml --model Qwen/Qwen2-VL-7B-Instruct
 ```
 
 ---
 
-## 실험
+## 실험 실행 방법
 
-각 실험 실행은 타임스탬프가 포함된 디렉토리를 생성합니다:
+CUBE는 세 가지 레벨의 실험을 지원합니다.
 
+### 단일 실험 실행 (`run_pilot.py`)
+
+한 가지 `(baseline × budget)` 조합을 특정 GPU에서 실행합니다.
+결과는 `experiments/results/<run_id>.csv`에 저장됩니다.
+
+```bash
+# 형식
+python experiments/run_pilot.py \
+  --baseline <reinforce|grpo|rloo|stv> \
+  --budget   <none|prompt_skip|rollout_alloc|subset_select> \
+  --gpu_id   <0|1|2|3> \
+  --output_dir experiments/results \
+  --M 256 --B 32 --N 8 \
+  --S 16 --K 8 --T 10 --R 32 \
+  --num_train_steps 200
+
+# 예시 1: RLOO × No-budget, GPU 1
+CUDA_VISIBLE_DEVICES=1 python experiments/run_pilot.py \
+  --baseline rloo --budget none --gpu_id 0 \
+  --output_dir experiments/results
+
+# 예시 2: GRPO × SubsetSelect, GPU 2
+CUDA_VISIBLE_DEVICES=2 python experiments/run_pilot.py \
+  --baseline grpo --budget subset_select --gpu_id 0 \
+  --output_dir experiments/results
 ```
-experiments/
-  Qwen_Qwen2_VL_7B_Instruct/
-    20250101_120000/
-      config.yaml
-      metrics/
-        bias_variance_heatmap.json
-      logs/
+
+### 3개 파일럿 실험 병렬 실행 (`launch_pilots.py`)
+
+GPU 1, 2, 3에서 3개 대표 조합을 **동시에** 실행합니다.
+파일럿 완료 후 나머지 9개 조합을 자동으로 큐잉합니다.
+
+```bash
+# 파일럿 3개만 실행
+python experiments/launch_pilots.py \
+  --output_dir experiments/results \
+  --S 4 --K 2 --T 10 \
+  --pilots_only
+
+# 전체 12개 조합 자동 체이닝 실행
+python experiments/launch_pilots.py \
+  --output_dir experiments/results \
+  --S 16 --K 8 --T 10
 ```
 
-### 실험 설계
+**파일럿 구성:**
+| GPU | 조합 | 분석 목적 |
+|-----|------|----------|
+| GPU 1 | RLOO × None | 이론적 기준선 (편향 최소) |
+| GPU 2 | GRPO × SubsetSelect | 융합 편향 + 분산 증폭 확인 |
+| GPU 3 | STV × PromptSkip | 크로스-프롬프트 잡음 라우팅 확인 |
+
+### 결과 병합 (`merge_results.py`)
+
+개별 실험 CSV를 하나의 마스터 CSV로 병합합니다.
+
+```bash
+python experiments/merge_results.py --results_dir experiments/results
+# → experiments/results/combined_results.csv
+```
+
+### CSV 컬럼 설명
+
+| 컬럼 | 설명 |
+|------|------|
+| `run_id` | 실험 고유 ID (타임스탬프 포함) |
+| `date`, `time`, `timestamp` | 측정 날짜/시간 (ISO 8601) |
+| `gpu_id` | 사용 GPU |
+| `baseline` / `budget` | 실험 조합 |
+| `step` / `checkpoint_idx` | 학습 스텝 및 체크포인트 인덱스 |
+| `total_bias_norm` | 총 편향 크기 $\|\mathbb{E}[\hat{g}] - \nabla J\|$ |
+| `budget_bias_proj_mean` | 예산 편향 $\mathbb{E}[\Psi(H-H_0)r]$ |
+| `baseline_bias_proj_mean` | 베이스라인 편향 $\mathbb{E}[\Psi H_0 A_B r]$ |
+| `fusion_bias_proj_mean` | **융합 편향** $\mathbb{E}[\Psi(H-H_0)A_B r]$ |
+| `total_var_mean` | 총 분산 $\text{tr}\,\text{Cov}(\hat{g})$ |
+| `within_var_mean` | 프롬프트 내 분산 $\mathbb{E}[\text{Cov}(\hat{g}\mid X)]$ |
+| `across_var_mean` | 프롬프트 간 분산 $\text{Cov}(\mathbb{E}[\hat{g}\mid X])$ |
+| `HL_proxy_mean` | 분산 프록시 $\|HL\|_F^2$ |
+| `reward_mean` | 해당 체크포인트에서의 평균 보상 |
+| `elapsed_seconds` | 경과 시간 (초) |
+
+### 파일럿 실험 결과 예시
+
+아래는 파일럿 3개 실험 (GPU 1,2,3 병렬, 각 약 52초 소요) 결과입니다:
+
+| 조합 | total_bias | fusion_bias | HL proxy | reward |
+|------|-----------|------------|---------|--------|
+| RLOO × None | 3.15e-4 | 0.000 | 4.46e-3 | 0.114 |
+| GRPO × SubsetSelect | 4.24e-3 | 7.0e-5 | **2.54e+13** | 0.115 |
+| STV × PromptSkip | 2.71e-4 | 1.7e-5 | 2.92e-3 | 0.115 |
+
+> GRPO × SubsetSelect의 HL proxy가 폭발적으로 증가하는 것은 GRPO std-정규화의 분모가 0에 가까워질 때 ($D_B \to \infty$) 발생하는 분산 증폭을 정리 2가 올바르게 예측함을 확인합니다.
+
+### 실험 설계 (plans_cube_02.txt 기반)
 
 **편향(Bias) 실험:**
 - **실험 1**: 4×3 = 12개 (베이스라인 × 예산) 조합에서 학습 중 스텝별 전체 편향 측정 → 히트맵
@@ -231,19 +308,17 @@ experiments/
 - **실험 2**: 분산 분해 (프롬프트 내부 vs 프롬프트 간)
 - **실험 3**: $\|HL\|_F^2$ 프록시 정확도 — 실제 분산과의 Spearman 상관계수
 
-**추가 분석:**
-- 편향-분산 vs 최종 태스크 정확도 히트맵
-
-### 주요 하이퍼파라미터
+### 주요 하이퍼파라미터 (plans_cube_02.txt)
 
 | 기호 | 기본값 | 설명 |
 |------|--------|------|
-| $M$ | 256 | 미니배치당 전체 롤아웃 수 |
+| $M$ | 256 | 미니배치당 전체 롤아웃 수 ($= B \times N_j$) |
 | $B$ | 32 | 미니배치당 프롬프트 수 |
-| $S$ | 16 | 미니배치 샘플링 반복 횟수 |
+| $N_j$ | 8 | 프롬프트당 롤아웃 수 (균일 배분 기준) |
+| $S$ | 16 | 미니배치 샘플링 반복 횟수 (Monte-Carlo) |
 | $K$ | 8 | 고정 미니배치에서 롤아웃 재샘플 횟수 |
-| $T$ | 10 | 로깅 체크포인트 수 |
-| $R$ | 32 | 프로브 벡터 수 |
+| $T$ | 10 | 학습 중 로깅 체크포인트 수 |
+| $R$ | 32 | probe 벡터 수 (시드 42로 고정 생성) |
 
 ---
 
