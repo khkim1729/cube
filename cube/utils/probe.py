@@ -19,7 +19,6 @@ def make_probe_vectors(
     R: int = 32,
     seed: int = 42,
     device: str = "cpu",
-    normalize: bool = True,
 ) -> torch.Tensor:
     """Generate R fixed probe vectors in R^d.
 
@@ -28,17 +27,13 @@ def make_probe_vectors(
         R         : number of probe vectors
         seed      : random seed (save this, not the vectors)
         device    : torch device
-        normalize : if True, return unit vectors
 
     Returns:
         probes: (R, d) tensor
     """
     gen = torch.Generator(device=device)
     gen.manual_seed(seed)
-    probes = torch.randn(R, param_dim, generator=gen, device=device)
-    if normalize:
-        probes = probes / probes.norm(dim=1, keepdim=True).clamp(min=1e-12)
-    return probes
+    return torch.randn(R, param_dim, generator=gen, device=device)
 
 
 def project_gradient(

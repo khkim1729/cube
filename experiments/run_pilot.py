@@ -179,7 +179,7 @@ def run_experiment(args):
     d = model.n_params
     print(f"  Model params: d = {d}")
 
-    probe_vecs = make_probe_vectors(d, R=args.R, seed=args.probe_seed, device=device, normalize=True)
+    probe_vecs = make_probe_vectors(d, R=args.R, seed=args.probe_seed, device=device)
     print(f"  Probe vectors: (R={args.R}, d={d}), seed={args.probe_seed}")
 
     # ── Data pool ─────────────────────────────────────────────────────────────

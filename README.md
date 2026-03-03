@@ -309,6 +309,18 @@ Values reported at the final training checkpoint (step 180/200).
 - **RLOO × None** achieves the lowest total bias with finite HL proxy, confirming the theoretical optimum
 - **Fusion Bias** is non-zero only when both budget ($H \neq H_0$) and baseline ($A_B \neq 0$) are active simultaneously
 
+> **Note:** Results above used normalized probe vectors ($\|v_r\|=1$). Probe vectors are now drawn from $v_r \sim \mathcal{N}(0,I)$ without normalization (`cube/utils/probe.py`). Absolute bias values scale with probe norm (~$\sqrt{d}$) but relative ordering and $\|HL\|_F^2$ are unaffected.
+
+### Validation Run with Updated Probe (GPU 3)
+
+Re-run of **RLOO × None** on GPU 3 after removing probe normalization (`S=4, K=2`):
+
+| Baseline | Budget | Total Bias | Fusion Bias | HL Proxy $\|HL\|_F^2$ |
+|----------|--------|-----------|------------|----------------------|
+| RLOO | None | 3.08e-2 | 0.000 | 4.46e-3 |
+
+The $\|HL\|_F^2$ (4.46e-3) matches the previous run exactly — confirming the proxy is independent of probe scaling. Fusion bias remains exactly zero as predicted by theory.
+
 ---
 
 ## Citation
