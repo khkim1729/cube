@@ -14,15 +14,19 @@ from pathlib import Path
 COMBO_ORDER = [
     ("reinforce", "none"),
     ("reinforce", "prompt_skip"),
+    ("reinforce", "rollout_alloc"),
     ("reinforce", "subset_select"),
     ("grpo",      "none"),
     ("grpo",      "prompt_skip"),
+    ("grpo",      "rollout_alloc"),
     ("grpo",      "subset_select"),
     ("rloo",      "none"),
     ("rloo",      "prompt_skip"),
+    ("rloo",      "rollout_alloc"),
     ("rloo",      "subset_select"),
     ("stv",       "none"),
     ("stv",       "prompt_skip"),
+    ("stv",       "rollout_alloc"),
     ("stv",       "subset_select"),
 ]
 
@@ -41,6 +45,7 @@ BASELINE_LABEL = {
 BUDGET_LABEL = {
     "none":          "None",
     "prompt_skip":   "PSkip",
+    "rollout_alloc": "RAlloc",
     "subset_select": "SubSel",
 }
 

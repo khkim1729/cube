@@ -61,11 +61,15 @@ def compute_variance(
     cond_mean = g_hat_samples.mean(dim=1)  # (S, R)
 
     # Within-minibatch variance: E_X[ Var_Y[g | X] ]
-    # = mean over S of Var_K[ g_{s,k} ]
-    within_var = g_hat_samples.var(dim=1, unbiased=False).mean(dim=0)  # (R,)
+    # Use unbiased=True (Bessel-corrected over K samples)
+    within_var = g_hat_samples.var(dim=1, unbiased=True).mean(dim=0)  # (R,)
 
     # Across-minibatch variance: Var_X[ E_Y[g | X] ]
-    across_var = cond_mean.var(dim=0, unbiased=False)  # (R,)
+    # Naive Var_S[hat_mu_s] overestimates by within_var/K:
+    #   Var[hat_mu_s] = Var_X[E[g|X]] + E_X[Var[g|X]] / K
+    # Bias-corrected (Bessel-corrected over S, then subtract noise floor):
+    naive_across = cond_mean.var(dim=0, unbiased=True)  # (R,)
+    across_var = (naive_across - within_var / K).clamp(min=0.0)
 
     # Total = within + across (law of total variance)
     total_var = within_var + across_var

@@ -40,15 +40,19 @@ from pathlib import Path
 ALL_EXPERIMENTS = [
     {"baseline": "reinforce", "budget": "none"},
     {"baseline": "reinforce", "budget": "prompt_skip"},
+    {"baseline": "reinforce", "budget": "rollout_alloc"},
     {"baseline": "reinforce", "budget": "subset_select"},
     {"baseline": "grpo",      "budget": "none"},
     {"baseline": "grpo",      "budget": "prompt_skip"},
-    {"baseline": "grpo",      "budget": "subset_select"},   # pilot 완료
-    {"baseline": "rloo",      "budget": "none"},            # pilot 완료
+    {"baseline": "grpo",      "budget": "rollout_alloc"},
+    {"baseline": "grpo",      "budget": "subset_select"},
+    {"baseline": "rloo",      "budget": "none"},
     {"baseline": "rloo",      "budget": "prompt_skip"},
+    {"baseline": "rloo",      "budget": "rollout_alloc"},
     {"baseline": "rloo",      "budget": "subset_select"},
     {"baseline": "stv",       "budget": "none"},
-    {"baseline": "stv",       "budget": "prompt_skip"},     # pilot 완료
+    {"baseline": "stv",       "budget": "prompt_skip"},
+    {"baseline": "stv",       "budget": "rollout_alloc"},
     {"baseline": "stv",       "budget": "subset_select"},
 ]
 

@@ -102,35 +102,48 @@ class DataPool:
 # 3. Per-Sample Score Vector Projection (fast via vmap)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_psi_proj_batch(
+def compute_multi_weight_projs(
     model: ToyPolicy,
-    prompts: torch.Tensor,   # (M, input_dim)
-    answers: torch.Tensor,   # (M,) int64
-    probe_vecs: torch.Tensor,  # (R, d)
+    prompts: torch.Tensor,        # (M, input_dim)
+    answers: torch.Tensor,        # (M,) int64
+    weight_vecs: list,            # list of n_w tensors, each (M,)
+    probe_vecs: torch.Tensor,     # (R, d)
     device: str,
-) -> torch.Tensor:
-    """Compute psi_proj[m] = probe_vecs @ grad_{theta} log π(answers[m] | prompts[m]).
+) -> list:
+    """Compute probe projections for multiple weight vectors via weighted backward.
 
-    Uses torch.func.vmap for efficient batched jacobian computation.
+    For each weight vector w, computes:
+        proj[r] = v_r . (Psi @ w) = v_r . grad_theta [sum_m w_m * log pi(a_m | x_m)]
 
-    Returns: (M, R)
+    Uses ONE shared forward pass + ONE backward pass per weight vector.
+    Replaces the previous M-backward-pass approach with n_weights passes,
+    reducing memory from O(M*d) to O(d) and giving ~M/n_weights speedup.
+
+    Args:
+        weight_vecs: list of n_w tensors each (M,) — e.g., [w_ghat, w_budget, ...]
+        probe_vecs:  (R, d) fixed probe vectors
+
+    Returns:
+        list of n_w tensors each (R,) — probe projections for each weight vector
     """
-    # Simple per-rollout loop using torch.autograd.grad.
-    # vmap + grad over F.one_hot causes scatter_ issues; the loop is
-    # fast enough for our small toy policy (~10K params) on A100.
-    M = prompts.shape[0]
-    R = probe_vecs.shape[0]
-    psi_proj = torch.zeros(M, R, device=prompts.device)
+    # Shared forward pass (compute log-probs once for all weight vectors)
+    logits    = model(prompts)                                        # (M, C)
+    log_probs = F.log_softmax(logits, dim=-1)                         # (M, C)
+    log_pi    = log_probs[torch.arange(len(answers), device=device), answers]  # (M,)
 
-    for m in range(M):
-        logits = model(prompts[m].unsqueeze(0))           # (1, C)
-        log_p  = F.log_softmax(logits[0], dim=-1)[answers[m]]  # scalar
-        grads  = torch.autograd.grad(log_p, model.parameters(),
-                                     retain_graph=False, create_graph=False)
+    results = []
+    n_w = len(weight_vecs)
+    for i, w in enumerate(weight_vecs):
+        retain = (i < n_w - 1)   # retain graph for all but the last backward
+        loss  = (w.detach() * log_pi).sum()   # scalar weighted log-prob
+        grads = torch.autograd.grad(
+            loss, model.parameters(),
+            retain_graph=retain, create_graph=False,
+        )
         flat_g = torch.cat([g.flatten() for g in grads])  # (d,)
-        psi_proj[m] = probe_vecs @ flat_g                 # (R,)
+        results.append(probe_vecs @ flat_g)                # (R,)
 
-    return psi_proj  # (M, R)
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +236,14 @@ def build_A_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor) -> torch
                 A[s:e, s:e] = block
 
     elif baseline == "stv":
-        A[:, :] = 1.0 / M
+        # BLOO: baseline for prompt i = mean reward of prompts j != i.
+        # Diagonal blocks are zero; off-diagonal weight = 1/((B-1)*N).
+        if B > 1:
+            w = 1.0 / ((B - 1) * N)
+            for i in range(B):
+                rows = slice(i * N, (i + 1) * N)
+                A[rows, :i * N] = w
+                A[rows, (i + 1) * N:] = w
 
     return A
 
@@ -412,26 +432,28 @@ def measure_checkpoint(
             A_B_r = A_B @ r                  # (M,) = A_B r
             tilde_a = d_B * (r - A_B_r)     # (M,) = D_B (I - A_B) r
 
-            # Psi_proj: (M, R) — core of the measurement
-            psi_proj = compute_psi_proj_batch(
-                model,
-                rollouts.prompts,        # (M, d_in)
-                rollouts.answers,        # (M,)
-                probe_vecs,              # (R, d)
-                device,
-            )  # (M, R)
+            # ── 5 weight vectors for the probe projections ────────────────────
+            # w1: g_hat weights  = H * D_B * (I-A_B) * r = H * tilde_a
+            w1 = H * tilde_a          # (M,)
+            # w2: budget bias   = (H-H0) * r
+            w2 = delta_H * r          # (M,)
+            # w3: baseline bias = H0 * A_B * r
+            w3 = H0 * A_B_r           # (M,)
+            # w4: fusion bias   = (H-H0) * A_B * r
+            w4 = delta_H * A_B_r      # (M,)
+            # w5: g_ref         = H0 * r
+            w5 = H0 * r               # (M,)
 
-            # ── 5 projection vectors (each (R,)) ──────────────────────────────
-            # p^1: g_hat = Psi H tilde_a
-            p1 = psi_proj.T @ (H * tilde_a)          # (R,)
-            # p^2: budget bias = Psi (H-H0) r
-            p2 = psi_proj.T @ (delta_H * r)           # (R,)
-            # p^3: baseline bias = Psi H0 A_B r
-            p3 = psi_proj.T @ (H0 * A_B_r)            # (R,)
-            # p^4: fusion bias = Psi (H-H0) A_B r
-            p4 = psi_proj.T @ (delta_H * A_B_r)       # (R,)
-            # q:   g_ref = Psi H0 r
-            q  = psi_proj.T @ (H0 * r)               # (R,)
+            # ── 5 projection vectors via weighted backward (1 fwd + 5 bwd) ───
+            # Replaces M separate backward passes → ~M/5 speedup, O(d) memory.
+            p1, p2, p3, p4, q = compute_multi_weight_projs(
+                model,
+                rollouts.prompts,   # (M, d_in)
+                rollouts.answers,   # (M,)
+                [w1, w2, w3, w4, w5],
+                probe_vecs,         # (R, d)
+                device,
+            )
 
             p1_buf[s, k] = p1
             p2_buf[s, k] = p2
@@ -481,16 +503,19 @@ def aggregate_metrics(cm: CheckpointMetrics) -> Dict[str, float]:
     mean_p4 = cm.p4.reshape(-1, R).mean(0)   # E[fusion_term]
 
     # ── Variance (Law of Total Variance over S, K) ────────────────────────────
-    # Total: Cov(g_hat) estimated via trace = E[||g - E[g]||^2] / R
-    p1_flat = cm.p1.reshape(-1, R)            # (S*K, R)
-    total_var_per_probe = p1_flat.var(dim=0, unbiased=False)   # (R,)
-
     # Within-minibatch: E_X[Var_Y[g|X]] = mean over S of Var over K
-    within_var_per_probe = cm.p1.var(dim=1, unbiased=False).mean(0)  # (R,)
+    # Use Bessel-corrected (unbiased=True) variance over K samples
+    within_var_per_probe = cm.p1.var(dim=1, unbiased=True).mean(0)  # (R,)
 
-    # Across-minibatch: Var_X[E_Y[g|X]] = Var over S of (mean over K)
+    # Across-minibatch: Var_X[E_Y[g|X]]
+    # Naive Var_S[hat_mu_s] overestimates by within/K (noise from K-sample mean).
+    # Bias-corrected: across = Var_S[hat_mu_s] - within / K
     cond_mean = cm.p1.mean(dim=1)             # (S, R)
-    across_var_per_probe = cond_mean.var(dim=0, unbiased=False)  # (R,)
+    naive_across = cond_mean.var(dim=0, unbiased=True)  # (R,) Bessel-corrected
+    across_var_per_probe = (naive_across - within_var_per_probe / K).clamp(min=0.0)
+
+    # Total = within + across (law of total variance)
+    total_var_per_probe = within_var_per_probe + across_var_per_probe
 
     def s(t): return t.mean().item()  # scalar mean
     def se(t): return t.std(unbiased=False).item()  # scalar std

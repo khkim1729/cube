@@ -20,15 +20,19 @@ from pathlib import Path
 ALL_EXPERIMENTS = [
     ("reinforce", "none"),
     ("reinforce", "prompt_skip"),
+    ("reinforce", "rollout_alloc"),
     ("reinforce", "subset_select"),
     ("grpo",      "none"),
     ("grpo",      "prompt_skip"),
+    ("grpo",      "rollout_alloc"),
     ("grpo",      "subset_select"),
     ("rloo",      "none"),
     ("rloo",      "prompt_skip"),
+    ("rloo",      "rollout_alloc"),
     ("rloo",      "subset_select"),
     ("stv",       "none"),
     ("stv",       "prompt_skip"),
+    ("stv",       "rollout_alloc"),
     ("stv",       "subset_select"),
 ]
 
@@ -36,9 +40,9 @@ ALL_EXPERIMENTS = [
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu_id",          type=int, required=True)
-    parser.add_argument("--n_runs",          type=int, default=10)
+    parser.add_argument("--n_runs",          type=int, default=15)
     parser.add_argument("--offset",          type=int, default=0,
-                        help="ALL_EXPERIMENTS에서 시작할 인덱스 (mod 12)")
+                        help="ALL_EXPERIMENTS에서 시작할 인덱스 (mod 16)")
     parser.add_argument("--results_dir",     type=str, default="experiments/results")
     parser.add_argument("--M",               type=int, default=256)
     parser.add_argument("--B",               type=int, default=32)
