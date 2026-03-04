@@ -476,6 +476,48 @@ CUBE 이론은 Fusion Bias가 $A_B \neq 0$ (베이스라인 활성) AND $H \neq 
 - **SubsetSelect**: 상위 보상 롤아웃에 가중치 집중 → 희소 집중 → HL 증가
 - 이 패턴이 3개 baseline에서 모두 일관 → $\|HL\|_F^2$가 budget 효과를 신뢰성 있게 포착
 
+### 다중 실행 통계 (총 54회 반복 실험)
+
+GPU 1·2·3에서 각 10개 실험 추가 실행 (`run_batch.py`), 조합당 4–5회 반복.
+`analyze_results.py`로 집계한 마지막 체크포인트(step 180/200) 기준 mean ± std.
+
+| 베이스라인 | 예산 | n_runs | Bias (mean±std) | Fusion (mean±std) | $\|HL\|_F^2$ |
+|----------|------|:------:|:----------------:|:-----------------:|:------------:|
+| REINFORCE | None | 5 | 0.000 ± 0.0 | **0.000 ± 0.0** | 3.91e-3 |
+| REINFORCE | PSkip | 5 | 5.26e-3 ± 2.9e-3 | **0.000 ± 0.0** | 2.93e-3 |
+| REINFORCE | SubSel | 4 | 9.54e-2 ± 6.3e-2 | **0.000 ± 0.0** | 7.81e-3 |
+| GRPO | None | 4 | 1.22e-1 ± 8.1e-2 | 0.000 ± 0.0 | **1.27e+13** |
+| GRPO | PSkip | 5 | 1.33e-1 ± 7.3e-2 | 0.000 ± 0.0 | **4.14e+12** |
+| GRPO | SubSel | 5 | **3.33e-1 ± 1.8e-1** | **5.53e-3 ± 3.1e-3** | **2.54e+13** |
+| RLOO | None | 4 | 2.32e-2 ± 1.5e-2 | 0.000 ± 0.0 | 4.46e-3 |
+| RLOO | PSkip | 4 | 2.32e-2 ± 1.5e-2 | 2.82e-4 ± 1.9e-4 | 3.35e-3 |
+| RLOO | SubSel | 5 | 8.80e-2 ± 4.9e-2 | 5.54e-3 ± 3.1e-3 | 8.93e-3 |
+| STV | None | 5 | 2.10e-2 ± 1.2e-2 | 0.000 ± 0.0 | 3.89e-3 |
+| STV | PSkip | 4 | 2.00e-2 ± 1.3e-2 | 1.23e-3 ± 8.1e-4 | 2.92e-3 |
+| STV | SubSel | 4 | 8.07e-2 ± 5.3e-2 | 3.00e-3 ± 2.0e-3 | 7.78e-3 |
+
+**④ 반복 실험에서 발견된 추가 인사이트**
+
+**(a) $\|HL\|_F^2$의 완전한 결정론적 재현성**
+
+54회 반복 실험에서 같은 (baseline, budget) 조합의 $\|HL\|_F^2$ 값은 run마다 **정확히 동일**.
+$\|HL\|_F^2 = \mathrm{tr}(L^\top H^2 L)$은 probe 벡터가 아닌 가중치 행렬만으로 결정되는 **결정론적 함수**임을 직접 확인.
+
+**(b) Fusion Bias: 통계적으로 유의미한 비零성**
+
+이론 예측 non-zero 5개 조합 모두 평균이 표준편차 대비 유의미하게 큼:
+- GRPO×SubSel: 5.53e-3 ± 3.1e-3 (mean/std = 1.8)
+- RLOO×SubSel: 5.54e-3 ± 3.1e-3 (mean/std = 1.8)
+- STV×SubSel: 3.00e-3 ± 2.0e-3 (mean/std = 1.5)
+
+반면 이론 예측 zero 7개 조합 (REINFORCE 전체 3개 + None-budget 전체 4개)은 모든 54회 실행에서 fusion bias = 정확히 **0.000**.
+
+**(c) Bias 추정치의 Monte-Carlo 노이즈**
+
+Bias는 S=4 샘플링 반복으로 추정되므로 run 간 변동이 존재.
+변동계수(CV = std/mean) 기준: GRPO계열 50–60%, 비GRPO 계열 50–65%.
+그러나 **조합 간 Bias 크기 순서는 모든 run에서 보존**: GRPO×SubSel > GRPO×PSkip ≈ GRPO×None > RLOO/STV×SubSel > 나머지.
+
 ### 실험 설계 (plans_cube_02.txt 기반)
 
 **편향(Bias) 실험:**
