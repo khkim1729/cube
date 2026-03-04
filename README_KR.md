@@ -8,13 +8,16 @@
 
 - [개요](#개요)
 - [핵심 기여](#핵심-기여)
-- [프레임워크 구조](#프레임워크-구조)
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
-- [데이터셋](#데이터셋)
+- [데이터셋 및 모델](#데이터셋-및-모델)
+  - [시뮬레이션 데이터 (현재 사용 중)](#시뮬레이션-데이터-현재-사용-중)
+  - [VLM 벤치마크 데이터셋](#vlm-벤치마크-데이터셋)
+  - [모델 정보](#모델-정보)
+  - [저장 경로 요약](#저장-경로-요약)
 - [빠른 시작](#빠른-시작)
-- [실험](#실험)
+- [실험 실행 방법](#실험-실행-방법)
 - [인용](#인용)
 
 ---
@@ -158,28 +161,103 @@ cube/
 
 ---
 
-## 데이터셋
+## 데이터셋 및 모델
 
-CUBE 실험은 HuggingFace Hub를 통해 이용 가능한 다음 VLM 벤치마크를 사용합니다:
+### 시뮬레이션 데이터 (현재 사용 중)
 
-| 데이터셋 | HF 이름 | 태스크 | 크기 |
-|---------|---------|--------|------|
-| **MathVista** | `AI4Math/MathVista` | 수학적 추론 | 6,141 |
-| **MMStar** | `lmms-lab/MMStar` | 멀티모달 추론 | 1,500 |
-| **ChartQA** | `HuggingFaceM4/ChartQA` | 차트 이해 | 32,717 |
-| **MMBench** | `lmms-lab/MMBench` | 멀티태스크 | 4,377 |
-| **ScienceQA** | `HuggingFaceM4/ScienceQA` | 과학 이미지 QA | 21,208 |
-| **MMMU-Pro** | `lmms-lab/MMMU_Pro` | 대학 수준 추론 | 3,460 |
-| **VQAv2** | `HuggingFaceM4/VQAv2` | 시각적 질의응답 | 214,354 |
-| **OK-VQA** | `Multimodal-Fatima/OK-VQA_train` | 지식 기반 VQA | 9,009 |
+파일럿 실험(`run_pilot.py`, `auto_next.py`)은 실제 데이터셋 없이 **런타임에 합성 데이터를 생성**합니다.
+
+`DataPool` 클래스 (`experiments/cube_sim.py`) 사양:
+
+| 항목 | 내용 |
+|------|------|
+| **프롬프트 표현** | 정규화된 랜덤 벡터 $\in \mathbb{R}^{64}$ |
+| **풀 크기** | `n_pool = 512` 개의 (프롬프트, 정답) 쌍 |
+| **정답 레이블** | $\{0, 1, \ldots, 9\}$ 균일 랜덤 |
+| **보상 함수** | 이진 (모델 예측 클래스 == 정답이면 +1, 아니면 0) |
+| **저장 위치** | **저장 없음** — 실험 실행 중 GPU 메모리에만 존재 |
+
+> 합성 데이터이므로 별도 다운로드나 디스크 저장이 필요 없습니다.
+
+---
+
+### VLM 벤치마크 데이터셋
+
+전체 VLM 실험 (향후)에서는 HuggingFace Hub의 멀티모달 벤치마크를 사용합니다.
+
+| 데이터셋 | HuggingFace ID | 태스크 | 분할 | 크기 |
+|---------|---------------|--------|------|------|
+| **MathVista** | `AI4Math/MathVista` | 수학적 추론 | testmini | 1,000 |
+| **MMStar** | `lmms-lab/MMStar` | 멀티모달 추론 | val | 1,500 |
+| **ChartQA** | `HuggingFaceM4/ChartQA` | 차트 이해 | test | 2,500 |
+| **MMBench** | `lmms-lab/MMBench` | 멀티태스크 | dev_en | 4,377 |
+| **ScienceQA** | `HuggingFaceM4/ScienceQA` | 과학 이미지 QA | test | 2,017 |
+| **MMMU-Pro** | `lmms-lab/MMMU_Pro` | 대학 수준 추론 | test | 3,460 |
+| **VQAv2** | `HuggingFaceM4/VQAv2` | 시각적 질의응답 | validation | — |
+| **OK-VQA** | `Multimodal-Fatima/OK-VQA_train` | 지식 기반 VQA | train | 9,009 |
+
+**저장 위치:**
+- 원본 데이터: `~/.cache/huggingface/hub/` (HuggingFace 기본 캐시, `HF_HOME` 환경 변수로 변경 가능)
+- 메타데이터: `datasets/<dataset_name>/<split>_meta.json` (샘플 ID 매핑용)
 
 ```bash
-# 데이터셋 다운로드
+# 데이터셋 다운로드 및 메타데이터 생성
 python datasets/download.py --dataset mathvista --split testmini
 
 # 이용 가능한 데이터셋 목록 확인
 python datasets/download.py --list
+
+# 커스텀 캐시 경로 지정
+python datasets/download.py --dataset mmstar --split val --cache_dir /your/path
 ```
+
+---
+
+### 모델 정보
+
+#### 시뮬레이션 모델: ToyPolicy (현재 사용 중)
+
+| 항목 | 내용 |
+|------|------|
+| **구조** | 2층 MLP: 64 → 128 → 10 (Linear + ReLU + Linear) |
+| **파라미터 수** | 9,610개 |
+| **입력** | $\mathbb{R}^{64}$ 프롬프트 벡터 |
+| **출력** | 10-class softmax (클래스 = 정답 레이블) |
+| **학습 방법** | RLVR (이진 보상, 검증 가능한 정답) |
+| **가중치 저장** | **저장 없음** — 실험 중 GPU 메모리에만 존재 |
+| **소요 시간** | A100 80GB 기준 약 52–100초/실험 |
+
+#### VLM 모델 (향후 전체 VLM 실험용)
+
+| 항목 | 내용 |
+|------|------|
+| **기본 모델** | `Qwen2-VL-7B-Instruct` |
+| **파라미터** | 약 7B (~15 GB) |
+| **HuggingFace ID** | `Qwen/Qwen2-VL-7B-Instruct` |
+| **저장 위치** | `~/.cache/huggingface/hub/models--Qwen--Qwen2-VL-7B-Instruct/` |
+| **접근 방식** | `VLMWrapper` (`cube/models/vlm_wrapper.py`), HuggingFace `AutoModelForCausalLM` |
+
+지원되는 추가 VLM 모델 (`VLMWrapper`):
+
+| 모델 | HuggingFace ID |
+|------|----------------|
+| LLaVA-1.5-7B | `llava-hf/llava-1.5-7b-hf` |
+| InternVL2-8B | `OpenGVLab/InternVL2-8B` |
+| Phi-3-Vision | `microsoft/Phi-3-vision-128k-instruct` |
+
+---
+
+### 저장 경로 요약
+
+| 종류 | 경로 | 비고 |
+|------|------|------|
+| 실험 결과 (개별) | `experiments/results/<run_id>.csv` | 실행마다 자동 생성 |
+| 실험 결과 (통합) | `experiments/results/combined_results.csv` | `merge_results.py` 실행 시 생성 |
+| 스케줄러 상태 | `experiments/results/queue.json` | `auto_next.py` 사용 시 |
+| VLM 데이터셋 메타 | `datasets/<name>/<split>_meta.json` | `download.py` 실행 시 생성 |
+| HuggingFace 캐시 | `~/.cache/huggingface/hub/` | 모델 + 데이터셋 원본 |
+| ToyPolicy 가중치 | (저장 없음) | 실험 중 GPU RAM에만 존재 |
+| probe 벡터 | (저장 없음) | 실험마다 seed=42로 재생성 |
 
 ---
 
