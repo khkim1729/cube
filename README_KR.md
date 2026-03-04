@@ -352,9 +352,13 @@ probe 정규화 제거 후 **RLOO × None**을 GPU 3에서 재실행 (`S=4, K=2`
 
 | 베이스라인 | 예산 | Total Bias | Fusion Bias | HL Proxy $\|HL\|_F^2$ |
 |----------|------|-----------|------------|----------------------|
-| RLOO | None | 3.08e-2 | 0.000 | 4.46e-3 |
+| RLOO | None | 3.08e-2 | 0.000 | **4.46e-3** |
+| GRPO | SubsetSelect | 4.15e-1 | 6.9e-3 | **2.54e+13** |
 
-$\|HL\|_F^2$ (4.46e-3)는 이전 실행과 동일 — probe 스케일과 무관함을 확인. Fusion Bias는 이론 예측대로 정확히 0.
+**주요 관찰:**
+- $\|HL\|_F^2$ 값은 pilot 실험 결과와 **완전히 동일** (RLOO×None: 4.46e-3, GRPO×SubSel: 2.54e+13) — probe 정규화 유무와 무관
+- Total Bias는 비정규화 probe 기준 약 ~$\sqrt{d} \approx 98$배 증가 (스케일 변화, 상대 순서 유지)
+- RLOO×None의 Fusion Bias는 두 설정 모두 정확히 0 — 이론적 보장 확인
 
 ### 실험 설계 (plans_cube_02.txt 기반)
 
