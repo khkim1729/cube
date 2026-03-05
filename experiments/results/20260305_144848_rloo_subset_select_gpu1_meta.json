@@ -1,0 +1,20 @@
+{
+  "run_id": "20260305_144848_rloo_subset_select_gpu1",
+  "baseline": "rloo",
+  "budget": "subset_select",
+  "gpu_id": 0,
+  "d": 9610,
+  "M": 256,
+  "B": 32,
+  "N": 8,
+  "S": 4,
+  "K": 2,
+  "T": 10,
+  "R": 32,
+  "probe_seed": 42,
+  "num_train_steps": 200,
+  "lr": 0.001,
+  "start_time": "2026-03-05T14:48:50.366441",
+  "end_time": "2026-03-05T14:48:53.270417",
+  "total_elapsed_seconds": 2.9
+}

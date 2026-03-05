@@ -205,6 +205,31 @@ def sample_rollouts(
 # 5. Baseline Operators (A_B matrices)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _compute_stv_lambda(rewards: torch.Tensor, B: int, N: int) -> torch.Tensor:
+    """Per-prompt James-Stein shrinkage λ_j ∈ [0,1] for STV."""
+    device = rewards.device
+    lambdas = torch.zeros(B, device=device)
+    if B <= 1:
+        return lambdas
+    mu = torch.zeros(B, device=device)
+    var_r = torch.zeros(B, device=device)
+    for j in range(B):
+        r_j = rewards[j * N:(j + 1) * N]
+        mu[j] = r_j.mean()
+        var_r[j] = r_j.var(unbiased=True) if N > 1 else torch.zeros(1, device=device).squeeze()
+    var_mu = var_r / N
+    for j in range(B):
+        mu_others = torch.cat([mu[:j], mu[j + 1:]])
+        var_mu_others = torch.cat([var_mu[:j], var_mu[j + 1:]])
+        mu_bar = mu_others.mean()
+        v2 = var_mu_others.mean()
+        s2 = ((mu_others - mu_bar) ** 2).mean()
+        denom = v2 + s2
+        if denom > 1e-12:
+            lambdas[j] = ((B - 1) / B) * v2 / denom
+    return lambdas.clamp(0.0, 1.0)
+
+
 def build_A_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor) -> torch.Tensor:
     """Build (M, M) baseline operator matrix A_B.
 
@@ -212,7 +237,7 @@ def build_A_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor) -> torch
       - 'reinforce': zero matrix
       - 'grpo':      block-diagonal, diag=1/Nj (group mean)
       - 'rloo':      block-diagonal, diag=0, off-diag=1/(Nj-1) (LOO)
-      - 'stv':       all-ones/M (full batch coupling)
+      - 'stv':       (I-Λ)A^prompt + Λ A^batch (adaptive STV)
     """
     M = rollouts.M
     B = rollouts.B
@@ -236,14 +261,33 @@ def build_A_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor) -> torch
                 A[s:e, s:e] = block
 
     elif baseline == "stv":
-        # BLOO: baseline for prompt i = mean reward of prompts j != i.
-        # Diagonal blocks are zero; off-diagonal weight = 1/((B-1)*N).
+        # Full STV: A_B = (I - Λ) A^prompt + Λ A^batch
+        # A^prompt: within-prompt RLOO block-diagonal
+        # A^batch:  cross-prompt BLOO (leave-one-prompt-out)
+        # Λ:        block-diagonal with per-prompt shrinkage λ_j
+        A_prompt = torch.zeros(M, M, device=device)
+        if N > 1:
+            for j in range(B):
+                s, e = j * N, (j + 1) * N
+                block = (torch.ones(N, N, device=device) - torch.eye(N, device=device)) / (N - 1)
+                A_prompt[s:e, s:e] = block
+
+        A_batch = torch.zeros(M, M, device=device)
         if B > 1:
             w = 1.0 / ((B - 1) * N)
-            for i in range(B):
-                rows = slice(i * N, (i + 1) * N)
-                A[rows, :i * N] = w
-                A[rows, (i + 1) * N:] = w
+            for j in range(B):
+                rows = slice(j * N, (j + 1) * N)
+                A_batch[rows, :j * N] = w
+                A_batch[rows, (j + 1) * N:] = w
+
+        # Compute per-prompt shrinkage λ_j (James-Stein)
+        lambdas = _compute_stv_lambda(rewards, B, N)
+        lam = torch.zeros(M, device=device)
+        for j in range(B):
+            lam[j * N:(j + 1) * N] = lambdas[j]
+
+        A = (1 - lam).unsqueeze(1) * A_prompt + lam.unsqueeze(1) * A_batch
+        return A
 
     return A
 
