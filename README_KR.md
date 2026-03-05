@@ -476,37 +476,37 @@ python experiments/merge_results.py --results_dir experiments/results
 
 ### 시뮬레이션 실험 결과 (전체 16개 조합)
 
-ToyPolicy (64→128→10 MLP, d=9,610 파라미터), GPU 3× NVIDIA A100 80GB, 조합당 약 50초 소요.
-`run_batch.py`로 GPU 1,2,3에서 병렬 실행, 각 GPU당 15회 실험. 마지막 체크포인트(step 180/200) 기준.
+ToyPolicy (64→128→10 MLP, d=9,610 파라미터), GPU 3× NVIDIA A100 80GB.
+`run_batch.py`로 GPU 1,2,3에서 병렬 실행, 총 **60회 실험** (조합당 n=3–4회). 마지막 체크포인트(step 180/200) 기준.
 $v_r \sim \mathcal{N}(0,I)$ (비정규화 probe, S=4, K=2)
 
 | 베이스라인 | 예산 | n_runs | Total Bias | Fusion Bias | $\|HL\|_F^2$ |
 |----------|------|:------:|:----------:|:-----------:|:------------:|
-| REINFORCE | None | 3 | 0.000 | **0.000** | 3.91e-3 |
-| REINFORCE | PromptSkip | 3 | 6.6e-3 | **0.000** | 2.93e-3 |
-| REINFORCE | RolloutAlloc | 3 | 1.96e-1 | **0.000** | 6.11e-3 |
-| REINFORCE | SubsetSelect | 3 | 1.27e-1 | **0.000** | 7.81e-3 |
-| GRPO | None | 2 | 1.63e-1 | 0.000 | **1.27e+13** |
-| GRPO | PromptSkip | 3 | 1.66e-1 | 0.000 | **4.14e+12** |
-| GRPO | RolloutAlloc | 3 | **4.32e-1** | **9.0e-3** | 2.12e+12 |
-| GRPO | SubsetSelect | 3 | 4.15e-1 | 6.9e-3 | **2.54e+13** |
-| RLOO | None | 3 | 3.09e-2 | 0.000 | 4.46e-3 |
-| RLOO | PromptSkip | 2 | 3.08e-2 | 3.8e-4 | 3.35e-3 |
-| RLOO | RolloutAlloc | 3 | 1.74e-1 | 7.9e-3 | 6.90e-3 |
-| RLOO | SubsetSelect | 3 | 1.10e-1 | 6.9e-3 | 8.93e-3 |
-| STV | None | 3 | 2.63e-2 | 0.000 | 3.92e-3 |
-| STV | PromptSkip | 3 | 2.61e-2 | 1.7e-3 | 2.94e-3 |
-| STV | RolloutAlloc | 3 | 1.80e-1 | 2.4e-3 | 6.23e-3 |
+| REINFORCE | None | 4 | 0.000 | **0.000** | 3.91e-3 |
+| REINFORCE | PromptSkip | 4 | 6.6e-3 | **0.000** | 2.93e-3 |
+| REINFORCE | RolloutAlloc | 4 | 1.96e-1 | **0.000** | 6.11e-3 |
+| REINFORCE | SubsetSelect | 4 | 1.27e-1 | **0.000** | 7.81e-3 |
+| GRPO | None | 3 | 1.63e-1 | 0.000 | **1.27e+13** |
+| GRPO | PromptSkip | 4 | 1.66e-1 | 0.000 | **4.14e+12** |
+| GRPO | RolloutAlloc | 4 | **4.32e-1** | **9.0e-3** | 2.12e+12 |
+| GRPO | SubsetSelect | 4 | 4.15e-1 | 6.9e-3 | **2.54e+13** |
+| RLOO | None | 4 | 3.09e-2 | 0.000 | 4.46e-3 |
+| RLOO | PromptSkip | 3 | 3.08e-2 | 3.8e-4 | 3.35e-3 |
+| RLOO | RolloutAlloc | 4 | 1.74e-1 | 7.9e-3 | 6.90e-3 |
+| RLOO | SubsetSelect | 4 | 1.10e-1 | 6.9e-3 | 8.93e-3 |
+| STV | None | 4 | 2.63e-2 | 0.000 | 3.92e-3 |
+| STV | PromptSkip | 4 | 2.61e-2 | 1.7e-3 | 2.94e-3 |
+| STV | RolloutAlloc | 4 | 1.80e-1 | 2.4e-3 | 6.23e-3 |
 | STV | SubsetSelect | 2 | 1.03e-1 | 4.3e-3 | 7.84e-3 |
 
 ### 분석
 
-**① Fusion Bias: 이론적 필요조건 완벽 확인 (45회 실험 전체)**
+**① Fusion Bias: 이론적 필요조건 완벽 확인 (60회 실험 전체)**
 
 CUBE 이론은 Fusion Bias가 $A_B \neq 0$ (베이스라인 활성) AND $H \neq H_0$ (예산 활성) 두 조건이 동시에 성립할 때만 0이 아님을 예측합니다.
 
-- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = **0.000** (4/4, 45회 전체)
-- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = **0.000** (4/4, 45회 전체)
+- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = **0.000** (4/4, 60회 전체)
+- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = **0.000** (4/4, 60회 전체)
 - Fusion Bias > 0인 조합 (큰 순서): GRPO×RAlloc(9.0e-3) > RLOO×RAlloc(7.9e-3) ≈ GRPO×SubSel(6.9e-3) ≈ RLOO×SubSel(6.9e-3) > STV×SubSel(4.3e-3) > STV×RAlloc(2.4e-3) > STV×PSkip(1.7e-3) > RLOO×PSkip(3.8e-4)
 - **RolloutAlloc**이 SubsetSelect보다 같거나 더 큰 Fusion Bias 생성 — 비균일 배분이 A_B 그룹 통계와 강하게 결합
 
@@ -531,11 +531,37 @@ CUBE 이론은 Fusion Bias가 $A_B \neq 0$ (베이스라인 활성) AND $H \neq 
 
 일관된 순서: **PromptSkip < None < RolloutAlloc < SubsetSelect** — 4개 예산 모두 3개 베이스라인에서 동일한 HL 순서 유지. $\|HL\|_F^2$가 budget 간 분산 증폭 크기를 신뢰성 있게 구분함을 확인.
 
-**④ $\|HL\|_F^2$의 완전한 결정론적 재현성**
+**④ 완전한 결정론적 재현성: HL proxy 및 Bias 모두**
 
-45회 반복 실험에서 같은 (baseline, budget) 조합의 $\|HL\|_F^2$ 값은 run마다 **정확히 동일** (std = 0).
-$\|HL\|_F^2 = \mathrm{tr}(L^\top H^2 L)$은 probe 벡터가 아닌 가중치 행렬만으로 결정되는 **결정론적 함수**임을 직접 확인.
-반면 Bias는 Monte-Carlo 노이즈 존재 (S=4 샘플링) — 조합 간 상대 순서는 보존됨.
+60회 반복 실험에서 같은 (baseline, budget) 조합의 **모든 측정값 (HL proxy, Bias, Fusion Bias)이 run마다 정확히 동일** (std = 0 across runs).
+
+이는 ToyPolicy 시뮬레이션이 완전히 결정론적임을 의미합니다:
+- 데이터 풀: 고정 시드로 생성 → 동일한 (프롬프트, 정답) 쌍
+- 모델 초기화: 고정 시드 → 동일한 학습 궤적
+- Probe 벡터: seed=42 고정 → 동일한 투영 방향
+
+결과적으로, **조합 간 bias/variance 값의 차이는 순수하게 (baseline, budget) 조합의 구조적 특성**에서 비롯됩니다. 즉, CUBE 이론이 예측하는 수학적 구조가 시뮬레이션 결과에 정확히 반영됩니다.
+
+**⑤ Baseline 간 Total Bias 비교 (None budget 기준)**
+
+| 베이스라인 | None budget Bias | 설명 |
+|----------|:----------------:|------|
+| REINFORCE | 0.000 | 참조 추정기 (편향 없음, A_B=0) |
+| RLOO | 3.09e-2 | LOO 베이스라인의 유한 잔류 편향 |
+| STV | 2.63e-2 | 배치 간 결합으로 인한 편향 |
+| GRPO | 1.63e-1 | D_B 폭발로 인한 가장 큰 편향 |
+
+RLOO와 STV의 None budget 편향이 유사한 수준임에 주목 — 두 방법 모두 REINFORCE 대비 편향이 존재하지만, SubsetSelect 예산 적용 시 STV(1.03e-1) < RLOO(1.10e-1)로 STV가 약간 유리.
+
+**⑥ RolloutAlloc의 높은 Total Bias 원인 분석**
+
+| 조합 | RAlloc Bias | SubSel Bias | 비율 |
+|------|:-----------:|:-----------:|:----:|
+| REINFORCE× | 1.96e-1 | 1.27e-1 | 1.54× |
+| RLOO× | 1.74e-1 | 1.10e-1 | 1.58× |
+| STV× | 1.80e-1 | 1.03e-1 | 1.75× |
+
+RolloutAlloc이 SubsetSelect보다 **1.5–1.8배 높은 Total Bias** 생성. 원인: 비균일 롤아웃 배분이 H-H0 편차를 더 극단적으로 만들어 예산 편향(Budget Bias)을 크게 증가시킴. 이는 RolloutAlloc 설계 시 H-H0 편차를 제어하는 정규화가 필요함을 시사.
 
 ### 실험 설계 (plans_cube_02.txt 기반)
 
