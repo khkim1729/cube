@@ -34,7 +34,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from experiments.cube_sim import (
     ToyPolicy, DataPool,
     measure_checkpoint, aggregate_metrics,
-    build_A_B, build_H, sample_rollouts, build_D_B,
+    compute_baseline_r, build_H, sample_rollouts, build_D_B,
+    _compute_stv_lambda,
 )
 from cube.utils.probe import make_probe_vectors
 
@@ -128,11 +129,11 @@ def train_step(
     r = rollouts.rewards  # (M,)
     M = rollouts.M
 
-    # Build operators
-    A_B = build_A_B(rollouts, baseline, r)
+    # Build operators (matrix-free: no M×M A_B)
     d_B = build_D_B(rollouts, baseline, r)
     H, H0 = build_H(rollouts, budget, r)
-    A_B_r = A_B @ r
+    lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt) if baseline == "stv" else None
+    A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
     # Compute log_probs for all rollouts (with grad)

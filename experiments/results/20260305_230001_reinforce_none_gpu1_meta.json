@@ -1,0 +1,20 @@
+{
+  "run_id": "20260305_230001_reinforce_none_gpu1",
+  "baseline": "reinforce",
+  "budget": "none",
+  "gpu_id": 1,
+  "d": 9610,
+  "M": 256,
+  "B": 32,
+  "N": 8,
+  "S": 16,
+  "K": 8,
+  "T": 10,
+  "R": 32,
+  "probe_seed": 42,
+  "num_train_steps": 200,
+  "lr": 0.001,
+  "start_time": "2026-03-05T23:00:05.055115",
+  "end_time": "2026-03-05T23:09:45.958225",
+  "total_elapsed_seconds": 580.9
+}

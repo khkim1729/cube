@@ -110,14 +110,14 @@ def compute_multi_weight_projs(
     probe_vecs: torch.Tensor,     # (R, d)
     device: str,
 ) -> list:
-    """Compute probe projections for multiple weight vectors via weighted backward.
+    """Compute probe projections via weighted backward passes.
 
     For each weight vector w, computes:
-        proj[r] = v_r . (Psi @ w) = v_r . grad_theta [sum_m w_m * log pi(a_m | x_m)]
+        proj[r] = v_r . ∇_θ[Σ_m w_m log π(y_m | x_m)]
 
-    Uses ONE shared forward pass + ONE backward pass per weight vector.
-    Replaces the previous M-backward-pass approach with n_weights passes,
-    reducing memory from O(M*d) to O(d) and giving ~M/n_weights speedup.
+    Uses ONE shared forward pass + n_w backward passes (one per weight vector).
+    Formula: the weighted loss Σ_m w_m log π(y_m|x_m) has gradient = Σ_m w_m ∇_θ log π(y_m|x_m).
+    (For VLMs with variable-length sequences, replace batched forward with a per-rollout loop.)
 
     Args:
         weight_vecs: list of n_w tensors each (M,) — e.g., [w_ghat, w_budget, ...]
@@ -126,16 +126,19 @@ def compute_multi_weight_projs(
     Returns:
         list of n_w tensors each (R,) — probe projections for each weight vector
     """
-    # Shared forward pass (compute log-probs once for all weight vectors)
-    logits    = model(prompts)                                        # (M, C)
-    log_probs = F.log_softmax(logits, dim=-1)                         # (M, C)
-    log_pi    = log_probs[torch.arange(len(answers), device=device), answers]  # (M,)
+    # Shared forward pass: compute log π(y_m|x_m) for all M rollouts at once.
+    # Equivalent to M per-rollout forward passes (formula: ∇_θ Σ_m w_m log π(y_m|x_m)).
+    # For VLMs with variable-length sequences, replace this with a per-rollout loop.
+    logits    = model(prompts)                                                  # (M, C)
+    log_probs = F.log_softmax(logits, dim=-1)                                   # (M, C)
+    log_pi    = log_probs[torch.arange(len(answers), device=device), answers]   # (M,)
 
+    # n_w backward passes: ∇_θ[Σ_m w_m log π(y_m|x_m)]
     results = []
     n_w = len(weight_vecs)
     for i, w in enumerate(weight_vecs):
-        retain = (i < n_w - 1)   # retain graph for all but the last backward
-        loss  = (w.detach() * log_pi).sum()   # scalar weighted log-prob
+        retain = (i < n_w - 1)
+        loss  = (w.detach() * log_pi).sum()
         grads = torch.autograd.grad(
             loss, model.parameters(),
             retain_graph=retain, create_graph=False,
@@ -230,66 +233,57 @@ def _compute_stv_lambda(rewards: torch.Tensor, B: int, N: int) -> torch.Tensor:
     return lambdas.clamp(0.0, 1.0)
 
 
-def build_A_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor) -> torch.Tensor:
-    """Build (M, M) baseline operator matrix A_B.
+def compute_baseline_r(
+    baseline: str,
+    rewards: torch.Tensor,                    # (M,)
+    B: int,
+    N: int,
+    lambdas: Optional[torch.Tensor] = None,   # (B,) STV lambdas, pre-computed
+) -> torch.Tensor:
+    """Compute A_B @ r directly via per-rollout summation (no M×M matrix).
 
-    Returns:
-      - 'reinforce': zero matrix
-      - 'grpo':      block-diagonal, diag=1/Nj (group mean)
-      - 'rloo':      block-diagonal, diag=0, off-diag=1/(Nj-1) (LOO)
-      - 'stv':       (I-Λ)A^prompt + Λ A^batch (adaptive STV)
+    Avoids building the (M, M) A_B matrix entirely, saving O(M^2) memory.
+    For VLMs where M can be large, this is critical.
+
+    Returns (M,) vector = A_B r.
     """
-    M = rollouts.M
-    B = rollouts.B
-    N = rollouts.N_per_prompt
+    M = B * N
     device = rewards.device
-    A = torch.zeros(M, M, device=device)
+    A_B_r = torch.zeros(M, device=device)
 
     if baseline == "reinforce":
-        return A  # zero → no baseline
+        return A_B_r  # A_B = 0
 
     elif baseline == "grpo":
+        # A_B r = group mean repeated: [mean(r_j), ..., mean(r_j)] for each j
         for j in range(B):
             s, e = j * N, (j + 1) * N
-            A[s:e, s:e] = 1.0 / N
+            A_B_r[s:e] = rewards[s:e].mean()
 
     elif baseline == "rloo":
-        for j in range(B):
-            s, e = j * N, (j + 1) * N
-            if N > 1:
-                block = (torch.ones(N, N, device=device) - torch.eye(N, device=device)) / (N - 1)
-                A[s:e, s:e] = block
-
-    elif baseline == "stv":
-        # Full STV: A_B = (I - Λ) A^prompt + Λ A^batch
-        # A^prompt: within-prompt RLOO block-diagonal
-        # A^batch:  cross-prompt BLOO (leave-one-prompt-out)
-        # Λ:        block-diagonal with per-prompt shrinkage λ_j
-        A_prompt = torch.zeros(M, M, device=device)
+        # A_B r = LOO mean: (sum_j - r_{j,i}) / (N-1) for each (j, i)
         if N > 1:
             for j in range(B):
                 s, e = j * N, (j + 1) * N
-                block = (torch.ones(N, N, device=device) - torch.eye(N, device=device)) / (N - 1)
-                A_prompt[s:e, s:e] = block
+                r_j = rewards[s:e]
+                A_B_r[s:e] = (r_j.sum() - r_j) / (N - 1)
 
-        A_batch = torch.zeros(M, M, device=device)
-        if B > 1:
-            w = 1.0 / ((B - 1) * N)
-            for j in range(B):
-                rows = slice(j * N, (j + 1) * N)
-                A_batch[rows, :j * N] = w
-                A_batch[rows, (j + 1) * N:] = w
-
-        # Compute per-prompt shrinkage λ_j (James-Stein)
-        lambdas = _compute_stv_lambda(rewards, B, N)
-        lam = torch.zeros(M, device=device)
+    elif baseline == "stv":
+        # A_B r = (1-λ_j) * RLOO_j + λ_j * BLOO_j
+        if lambdas is None:
+            lambdas = _compute_stv_lambda(rewards, B, N)
+        total_sum = rewards.sum()
         for j in range(B):
-            lam[j * N:(j + 1) * N] = lambdas[j]
+            s, e = j * N, (j + 1) * N
+            r_j = rewards[s:e]
+            lam_j = lambdas[j].item()
+            # Within-prompt RLOO: (Σ r_j - r_{j,i}) / (N-1)
+            rloo_j = (r_j.sum() - r_j) / (N - 1) if N > 1 else torch.zeros(N, device=device)
+            # Cross-prompt BLOO: mean reward of all other prompts
+            bloo_scalar = (total_sum - r_j.sum()) / ((B - 1) * N) if B > 1 else 0.0
+            A_B_r[s:e] = (1 - lam_j) * rloo_j + lam_j * bloo_scalar
 
-        A = (1 - lam).unsqueeze(1) * A_prompt + lam.unsqueeze(1) * A_batch
-        return A
-
-    return A
+    return A_B_r
 
 
 def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -332,26 +326,22 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
         return H0.clone(), H0
 
     elif budget == "prompt_skip":
-        # Skip prompts with lowest reward variance
-        variances = torch.tensor([
-            rewards[j * N:(j + 1) * N].var(unbiased=False).item()
-            for j in range(B)
-        ], device=device)
-        n_skip = max(1, int(B * skip_ratio))
-        _, skip_idx = variances.topk(n_skip, largest=False)
-        skip_set = set(skip_idx.tolist())
-
-        w = torch.ones(M, device=device)
-        for j in skip_set:
-            w[j * N:(j + 1) * N] = 0.0
-
-        H = torch.zeros(M, device=device)
+        # DAPO-style: skip prompts with zero reward variance (all-correct or all-wrong).
+        # Reference: DAPO (arXiv:2503.14476) — filter groups where accuracy ∈ {0, 1}.
+        # These prompts provide no learning signal; including them wastes compute.
+        skip_set = set()
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            w_j = w[s:e]
-            Z_j = w_j.sum()
-            if Z_j > 0:
-                H[s:e] = (w_j / Z_j) / B
+            r_j = rewards[j * N:(j + 1) * N]
+            if r_j.var(unbiased=False).item() < 1e-8:
+                skip_set.add(j)
+
+        # Safety: if all prompts have zero variance, keep all (no skip)
+        if len(skip_set) == B:
+            return H0.clone(), H0
+
+        H = H0.clone()
+        for j in skip_set:
+            H[j * N:(j + 1) * N] = 0.0
 
         return H, H0
 
@@ -391,6 +381,56 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
         return H, H0
 
     raise ValueError(f"Unknown budget: {budget}")
+
+
+def compute_HL_sq(
+    baseline: str,
+    rewards: torch.Tensor,                    # (M,)
+    B: int,
+    N: int,
+    H: torch.Tensor,                          # (M,) budget diagonal
+    d_B: torch.Tensor,                        # (M,) D_B diagonal
+    lambdas: Optional[torch.Tensor] = None,   # (B,) STV lambdas, pre-computed
+) -> float:
+    """Compute ||diag(H) L||_F^2 analytically (no M×M L matrix).
+
+    L = D_B (I - A_B), so:
+        ||HL||_F^2 = Σ_t (H[t] * d_B[t])^2 * ||(I-A_B)_t||^2
+
+    Per-row squared norms of (I - A_B):
+        REINFORCE:  1
+        GRPO:       (N-1)/N
+        RLOO:       N/(N-1)
+        STV:        1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+    """
+    device = rewards.device
+    M = B * N
+    row_sq = torch.zeros(M, device=device)
+
+    if baseline == "reinforce":
+        row_sq.fill_(1.0)
+
+    elif baseline == "grpo":
+        row_sq.fill_((N - 1) / N if N > 1 else 0.0)
+
+    elif baseline == "rloo":
+        row_sq.fill_(N / (N - 1) if N > 1 else 1.0)
+
+    elif baseline == "stv":
+        if lambdas is None:
+            lambdas = _compute_stv_lambda(rewards, B, N)
+        for j in range(B):
+            s, e = j * N, (j + 1) * N
+            lam_j = lambdas[j].item()
+            # ||row_t||^2 = 1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+            val = 1.0
+            if N > 1:
+                val += (1 - lam_j) ** 2 / (N - 1)
+            if B > 1:
+                val += lam_j ** 2 / ((B - 1) * N)
+            row_sq[s:e] = val
+
+    return ((H * d_B) ** 2 * row_sq).sum().item()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,17 +504,16 @@ def measure_checkpoint(
             r = rollouts.rewards  # (M,)
 
             # Build operators
-            A_B = build_A_B(rollouts, baseline, r)         # (M, M)
-            d_B = build_D_B(rollouts, baseline, r)         # (M,)  diagonal of D_B
+            d_B = build_D_B(rollouts, baseline, r)         # (M,) diagonal of D_B
             H, H0 = build_H(rollouts, budget, r)           # (M,), (M,)
             delta_H = H - H0                               # (M,)
 
-            # L = D_B @ (I - A_B) — residual operator
-            L = torch.diag(d_B) @ (torch.eye(M, device=device) - A_B)  # (M, M)
+            # Compute STV lambdas once (reused by compute_baseline_r and compute_HL_sq)
+            lambdas = _compute_stv_lambda(r, B, N) if baseline == "stv" else None
 
-            # Advantage vectors
-            A_B_r = A_B @ r                  # (M,) = A_B r
-            tilde_a = d_B * (r - A_B_r)     # (M,) = D_B (I - A_B) r
+            # Advantage vectors (matrix-free: direct summation, no M×M A_B)
+            A_B_r   = compute_baseline_r(baseline, r, B, N, lambdas)  # (M,) = A_B r
+            tilde_a = d_B * (r - A_B_r)                               # (M,) = D_B(I-A_B)r
 
             # ── 5 weight vectors for the probe projections ────────────────────
             # w1: g_hat weights  = H * D_B * (I-A_B) * r = H * tilde_a
@@ -488,8 +527,7 @@ def measure_checkpoint(
             # w5: g_ref         = H0 * r
             w5 = H0 * r               # (M,)
 
-            # ── 5 projection vectors via weighted backward (1 fwd + 5 bwd) ───
-            # Replaces M separate backward passes → ~M/5 speedup, O(d) memory.
+            # ── 5 projection vectors: 1 shared fwd + 5 weighted bwd ─────────
             p1, p2, p3, p4, q = compute_multi_weight_projs(
                 model,
                 rollouts.prompts,   # (M, d_in)
@@ -506,9 +544,8 @@ def measure_checkpoint(
             q_buf[s, k]  = q
 
             # ── Scalar diagnostics ────────────────────────────────────────────
-            # HL_F^2 = ||diag(H) @ L||_F^2
-            HL = H.unsqueeze(1) * L            # (M, M)
-            HL_buf[flat_idx]     = (HL ** 2).sum()
+            # HL_F^2 = ||diag(H) L||_F^2, computed analytically (no M×M matrix)
+            HL_buf[flat_idx]     = compute_HL_sq(baseline, r, B, N, H, d_B, lambdas)
             ghat_norms[flat_idx] = p1.norm()
             gref_norms[flat_idx] = q.norm()
             rew_means[flat_idx]  = r.mean()
