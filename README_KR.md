@@ -164,7 +164,7 @@ cube/
 
 ## 코드 수정 사항 (v3)
 
-동료 피드백을 반영하여 다음 핵심 수정이 이루어졌습니다.
+v3에서 다음 핵심 수정이 이루어졌습니다.
 
 ### 1. STV Full Adaptive 구현 (`cube/estimators/stv.py`, `experiments/cube_sim.py`)
 
