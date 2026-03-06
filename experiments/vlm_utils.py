@@ -53,14 +53,14 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
         model     : PeftModel with LoRA, in bf16
         processor : AutoProcessor for Qwen2-VL
     """
-    from transformers import AutoModelForCausalLM, AutoProcessor
+    from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
     from peft import LoraConfig, get_peft_model, TaskType
 
     model_id = "Qwen/Qwen2-VL-7B-Instruct"
     print(f"  Loading {model_id} ...")
-    model = AutoModelForCausalLM.from_pretrained(
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map=device,
         trust_remote_code=True,
     )
@@ -138,7 +138,20 @@ def load_vlm_dataset(name: str, split: str = None, n_pool: int = 512) -> list:
 
     Each item: {"question": str, "image": PIL.Image or None, "gold": str, "type": str}
     """
-    from datasets import load_dataset
+    import sys as _sys
+    import os as _os
+    from pathlib import Path as _Path
+    # Bypass local cube/datasets/ directory that shadows HuggingFace datasets
+    _repo_root = str(_Path(__file__).parent.parent.resolve())
+    _removed = [i for i, p in enumerate(_sys.path)
+                if _os.path.abspath(p) == _repo_root]
+    for i in reversed(_removed):
+        _sys.path.pop(i)
+    try:
+        from datasets import load_dataset
+    finally:
+        for i, p in zip(_removed, [_repo_root] * len(_removed)):
+            _sys.path.insert(i, p)
 
     cfg = DATASET_CONFIGS[name]
     ds_split = split or cfg["split"]
@@ -149,6 +162,9 @@ def load_vlm_dataset(name: str, split: str = None, n_pool: int = 512) -> list:
     for ex in ds:
         question = ex.get(cfg["question_field"], "")
         image = ex.get(cfg["image_field"], None)
+        # MathVista stores a path string; use decoded_image (PIL) if available
+        if isinstance(image, str):
+            image = ex.get("decoded_image", None)
 
         # Gold answer
         if name == "scienceqa":
@@ -376,11 +392,13 @@ def compute_log_probs_batch(
         text_prompt = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        prompt_ids = processor(
+        # Call processor once per prompt to get all inputs (pixel_values, image_grid_thw, etc.)
+        proc_out = processor(
             text=[text_prompt],
             images=[item["image"]] if item.get("image") else None,
             return_tensors="pt",
-        ).to(device).input_ids  # (1, L_prompt)
+        ).to(device)
+        prompt_ids = proc_out.input_ids  # (1, L_prompt)
         L_p = prompt_ids.shape[1]
 
         for i in range(N):
@@ -389,19 +407,34 @@ def compute_log_probs_batch(
                 resp, return_tensors="pt", add_special_tokens=False
             ).input_ids.to(device)  # (1, L_resp)
 
-            # Concatenate prompt + response
+            # Concatenate prompt + response tokens
             full_ids = torch.cat([prompt_ids, resp_ids], dim=1)  # (1, L_full)
 
+            # Build model kwargs: extend attention_mask and mm_token_type_ids for resp tokens
+            model_kwargs = {"input_ids": full_ids}
+            if "attention_mask" in proc_out:
+                extra_mask = torch.ones(
+                    (1, resp_ids.shape[1]), device=device,
+                    dtype=proc_out.attention_mask.dtype
+                )
+                model_kwargs["attention_mask"] = torch.cat(
+                    [proc_out.attention_mask, extra_mask], dim=1
+                )
+            if "pixel_values" in proc_out:
+                model_kwargs["pixel_values"] = proc_out.pixel_values
+            if "image_grid_thw" in proc_out:
+                model_kwargs["image_grid_thw"] = proc_out.image_grid_thw
+            if "mm_token_type_ids" in proc_out:
+                extra_type = torch.zeros(
+                    (1, resp_ids.shape[1]), device=device,
+                    dtype=proc_out.mm_token_type_ids.dtype
+                )
+                model_kwargs["mm_token_type_ids"] = torch.cat(
+                    [proc_out.mm_token_type_ids, extra_type], dim=1
+                )
+
             # Forward pass (with grad)
-            if item.get("image") is not None:
-                pixel_values = processor(
-                    text=[text_prompt],
-                    images=[item["image"]],
-                    return_tensors="pt",
-                ).to(device).get("pixel_values")
-                out = model(input_ids=full_ids, pixel_values=pixel_values)
-            else:
-                out = model(input_ids=full_ids)
+            out = model(**model_kwargs)
 
             logits = out.logits[0]  # (L_full, vocab)
             # Shift: logits[t] predicts token[t+1]

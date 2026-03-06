@@ -239,25 +239,32 @@ def train_step_vlm(
     A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
-    # Compute log probs with grad
+    # Compute log probs and accumulate gradients one rollout at a time (memory-efficient).
+    # Avoids holding M full computation graphs simultaneously.
     from experiments.vlm_utils import compute_log_probs_batch
-    log_pi = compute_log_probs_batch(
-        model, processor,
-        rollouts.items, rollouts.responses,
-        N=rollouts.N_per_prompt, device=device,
-    )  # (M,) with grad
-
-    loss = -(log_pi * (H * tilde_a).detach()).sum()
+    weights = (H * tilde_a).detach()  # (M,) no grad needed
 
     optimizer.zero_grad()
-    loss.backward()
+    model.train()
+    total_loss = 0.0
+    for j, item in enumerate(rollouts.items):
+        log_pi_j = compute_log_probs_batch(
+            model, processor,
+            [item], rollouts.responses[j * N:(j + 1) * N],
+            N=N, device=device,
+        )  # (N,) with grad
+        loss_j = -(log_pi_j * weights[j * N:(j + 1) * N]).sum()
+        loss_j.backward()
+        total_loss += loss_j.item()
+        torch.cuda.empty_cache()
+
     torch.nn.utils.clip_grad_norm_(
         [p for p in model.parameters() if p.requires_grad], max_norm=1.0
     )
     optimizer.step()
 
     verifiable_ratio = ((r > 0).float().mean()).item()
-    return loss.item(), r.mean().item(), verifiable_ratio
+    return total_loss, r.mean().item(), verifiable_ratio
 
 
 # ─────────────────────────────────────────────────────────────────────────────
