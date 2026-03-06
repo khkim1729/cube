@@ -472,86 +472,89 @@ python experiments/merge_results.py --results_dir experiments/results
 ### 시뮬레이션 실험 결과 (전체 16개 조합)
 
 ToyPolicy (64→128→10 MLP, d=9,610 파라미터), GPU 3× NVIDIA A100 80GB.
-`run_batch.sh`로 GPU 1,2,3에서 병렬 실행, 총 **174회 실험** (조합당 n=8–17회). 마지막 체크포인트(step 180/200) 기준.
-$v_r \sim \mathcal{N}(0,I)$ (비정규화 probe, **S=16, K=8** — 전체 프로토콜). DAPO-style PromptSkip 적용.
+`run_batch.py`로 GPU 1,2,3에서 병렬 실행, 총 **219회 실험** (조합당 n=11–20회). 마지막 체크포인트(step 180/200) 기준.
+$v_r \sim \mathcal{N}(0,I)$ (비정규화 probe, **S=4, K=2** — 파일럿 프로토콜). DAPO-style PromptSkip 적용.
 
 | 베이스라인 | 예산 | n_runs | Total Bias | Fusion Bias | $\|HL\|_F^2$ |
 |----------|------|:------:|:----------:|:-----------:|:------------:|
-| REINFORCE | None | 17 | 0.000 | **0.000** | 3.91e-3 |
-| REINFORCE | PromptSkip | 13 | 6.0e-4 | **0.000** | **2.75e-3** |
-| REINFORCE | RolloutAlloc | 12 | 3.99e-2 | **0.000** | 6.32e-3 |
-| REINFORCE | SubsetSelect | 10 | 1.67e-2 | **0.000** | 7.81e-3 |
-| GRPO | None | 11 | 1.85e-2 | 0.000 | 1.32e+13 |
-| GRPO | PromptSkip | 10 | 2.15e-2 | 0.000 | 2.90e+12 |
-| GRPO | RolloutAlloc | 11 | **6.81e-2** | **1.01e-2** | 2.09e+12 |
-| GRPO | SubsetSelect | 12 | 4.87e-2 | 5.65e-3 | **2.60e+13** |
-| RLOO | None | 12 | 3.39e-3 | 0.000 | 4.46e-3 |
-| RLOO | PromptSkip | 9 | 3.33e-3 | 2.08e-4 | 3.04e-3 |
-| RLOO | RolloutAlloc | 11 | 3.72e-2 | 8.87e-3 | 7.25e-3 |
-| RLOO | SubsetSelect | 11 | 1.30e-2 | 5.77e-3 | 8.93e-3 |
-| STV (full) | None | 8 | 2.70e-3 | 0.000 | 4.07e-3 |
-| STV (full) | PromptSkip | 10 | _2.45e-3_ | 6.35e-4 | _2.75e-3_ |
-| STV (full) | RolloutAlloc | 9 | 4.04e-2 | 4.90e-3 | 6.75e-3 |
-| STV (full) | SubsetSelect | 9 | 1.31e-2 | 4.16e-3 | 8.13e-3 |
+| REINFORCE | None | 20 | 0.000 | **0.000** | 3.91e-3 |
+| REINFORCE | PromptSkip | 16 | 3.69e-3 | **0.000** | **2.69e-3** |
+| REINFORCE | RolloutAlloc | 15 | 2.54e-1 | **0.000** | 6.28e-3 |
+| REINFORCE | SubsetSelect | 13 | 1.14e-1 | **0.000** | 7.81e-3 |
+| GRPO | None | 12 | 1.36e-1 | 0.000 | 1.31e+13 |
+| GRPO | PromptSkip | 13 | 1.51e-1 | 0.000 | 2.23e+12 |
+| GRPO | RolloutAlloc | 14 | **4.56e-1** | **1.08e-2** | 2.10e+12 |
+| GRPO | SubsetSelect | 15 | 3.39e-1 | 5.65e-3 | **2.59e+13** |
+| RLOO | None | 15 | 2.89e-2 | 0.000 | 4.46e-3 |
+| RLOO | PromptSkip | 11 | 2.81e-2 | 1.70e-4 | 3.00e-3 |
+| RLOO | RolloutAlloc | 14 | 2.38e-1 | 9.81e-3 | 7.18e-3 |
+| RLOO | SubsetSelect | 14 | 9.52e-2 | 5.63e-3 | 8.93e-3 |
+| STV (full) | None | 11 | 2.32e-2 | 0.000 | 4.07e-3 |
+| STV (full) | PromptSkip | 13 | _2.16e-2_ | 6.88e-4 | _2.70e-3_ |
+| STV (full) | RolloutAlloc | 12 | 2.50e-1 | 5.23e-3 | 6.66e-3 |
+| STV (full) | SubsetSelect | 11 | 9.32e-2 | 4.09e-3 | 8.13e-3 |
 
-(굵은 글씨: 컬럼 최댓값, 이탤릭 밑줄: 비GRPO 최솟값)
+(굵은 글씨: 컬럼 최댓값, 이탤릭: 비GRPO 최솟값)
 
 ### 분석
 
-**① Fusion Bias: 구조적 영조건 확인 (174회 전체)**
+**① Fusion Bias: 구조적 영조건 확인 (219회 전체)**
 
-- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = 0.000
-- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = 0.000
+- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = 0.000 (219회 전체 확인)
+- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = 0.000 (219회 전체 확인)
 - **DAPO-style PSkip**: $\text{Var}(r_j) = 0$인 그룹만 스킵하므로 $H \approx H_0$ → GRPO×PSkip, RLOO×PSkip Fusion ≈ 0
-- Fusion Bias > 0 (큰 순서): GRPO×RAlloc(1.01e-2) > RLOO×RAlloc(8.87e-3) > RLOO×SubSel(5.77e-3) ≈ GRPO×SubSel(5.65e-3) > STV×RAlloc(4.90e-3) > STV×SubSel(4.16e-3) > STV×PSkip(6.35e-4) > RLOO×PSkip(2.08e-4)
-- **RolloutAlloc**이 SubsetSelect보다 더 큰 Fusion Bias — 비균일 배분이 $A_B$ 그룹 통계와 강하게 결합
+- Fusion Bias > 0 (큰 순서): GRPO×RAlloc(**1.08e-2**) > RLOO×RAlloc(9.81e-3) > GRPO×SubSel(5.65e-3) ≈ RLOO×SubSel(5.63e-3) > STV×RAlloc(5.23e-3) > STV×SubSel(4.09e-3) >> STV×PSkip(6.88e-4) >> RLOO×PSkip(1.70e-4)
+- **RolloutAlloc**이 SubsetSelect보다 큰 Fusion Bias — 비균일 배분이 $A_B$ 그룹 통계와 강하게 결합
 
 **② GRPO의 $\|HL\|_F^2$ 폭발**
 
 | 구분 | HL proxy 범위 |
 |------|--------------|
-| GRPO 계열 | 2.09e+12 – 2.60e+13 |
-| 비GRPO 계열 | 2.75e-3 – 8.93e-3 |
+| GRPO 계열 | 2.10e+12 – 2.59e+13 |
+| 비GRPO 계열 | 2.69e-3 – 8.93e-3 |
 
 최소 GRPO HL / 최대 비GRPO HL ≈ **2.3 × 10¹⁴배** 차이.
 원인: GRPO의 보상 의존적 $D_B$ (std 정규화)에서 $\sigma_\text{reward} \to 0$ 시 $D_B \to \infty$.
-**DAPO PSkip의 부분 효과**: GRPO×None(1.32e13) → GRPO×PSkip(2.90e12). 분산=0인 그룹을 필터링해 HL을 약 4.5배 감소시키나, 분산이 작은(0에 가까운) 그룹들이 여전히 HL 폭발 유발.
+**DAPO PSkip 효과**: GRPO×None(1.31e+13) → GRPO×PSkip(2.23e+12). 분산=0인 그룹 필터링으로 HL **약 5.9배 감소**.
 
 **③ Budget 종류가 HL proxy에 미치는 영향 (비GRPO 3개 baseline 공통)**
 
 | 예산 | REINFORCE | RLOO | STV (full) | 설명 |
 |------|-----------|------|------------|------|
 | None | 3.91e-3 | 4.46e-3 | 4.07e-3 | 기준 |
-| PromptSkip | 2.75e-3 | 3.04e-3 | 2.75e-3 | **감소** ↓ |
-| RolloutAlloc | 6.32e-3 | 7.25e-3 | 6.75e-3 | **증가** ↑ |
-| SubsetSelect | 7.81e-3 | 8.93e-3 | 8.13e-3 | **더 증가** ↑↑ |
+| PromptSkip | **2.69e-3** | **3.00e-3** | **2.70e-3** | **감소** ↓ (최저) |
+| RolloutAlloc | 6.28e-3 | 7.18e-3 | 6.66e-3 | **증가** ↑ |
+| SubsetSelect | 7.81e-3 | 8.93e-3 | 8.13e-3 | **더 증가** ↑↑ (최대) |
 
-일관된 순서: **PromptSkip < None < RolloutAlloc < SubsetSelect**. DAPO-style PSkip은 학습 신호가 없는 그룹(분산=0)만 제거해 HL을 가장 효율적으로 낮춤.
+일관된 순서: **PromptSkip < None < RolloutAlloc < SubsetSelect**. 219회 실험에서도 동일하게 재확인.
 
-**④ 전체 프로토콜(S=16, K=8)에서 RLOO의 이론적 비편향성 확인**
+**④ RLOO vs STV: None budget에서의 편향 비교**
+
+S=4, K=2 파일럿 프로토콜에서 MC 노이즈로 인해 bias 추정치의 절대값은 크지만, 상대 순서는 안정적:
 
 | 베이스라인 | None budget Bias | 설명 |
 |----------|:----------------:|------|
-| REINFORCE | 0.000 | 참조 추정기 (A_B=0) |
-| STV (full) | 2.70e-3 | 적응적 λ_j로 편향 최소화 |
-| RLOO | 3.39e-3 | LOO 이론적 비편향성 거의 확인 |
-| GRPO | 1.85e-2 | D_B 편향 |
+| REINFORCE | 0.000 | 참조 추정기 ($A_B=0$, 정확히 0) |
+| STV (full) | 2.32e-2 | James-Stein 적응 축소 적용 |
+| RLOO | 2.89e-2 | LOO leave-one-out |
+| GRPO | 1.36e-1 | $D_B$ 정규화 편향 |
 
-S=16, K=8 전체 프로토콜에서 RLOO×None bias = 3.39e-3 (≈0), RLOO의 이론적 비편향성 확인. Full adaptive STV가 None budget에서 RLOO보다 낮은 편향(2.70e-3 < 3.39e-3).
+STV가 RLOO보다 낮은 편향을 보이며, 두 방법 모두 GRPO 대비 현저히 낮음.
 
-**⑤ RolloutAlloc vs SubsetSelect: Total Bias 비교**
+**⑤ RolloutAlloc vs SubsetSelect: Total Bias 비교 (219회)**
 
 | 조합 | RAlloc Bias | SubSel Bias | 비율 |
 |------|:-----------:|:-----------:|:----:|
-| REINFORCE× | 3.99e-2 | 1.67e-2 | 2.4× |
-| RLOO× | 3.72e-2 | 1.30e-2 | 2.9× |
-| STV (full)× | 4.04e-2 | 1.31e-2 | 3.1× |
+| REINFORCE× | 2.54e-1 | 1.14e-1 | 2.2× |
+| RLOO× | 2.38e-1 | 9.52e-2 | 2.5× |
+| STV (full)× | 2.50e-1 | 9.32e-2 | 2.7× |
 
-RolloutAlloc이 SubsetSelect보다 **2.4–3.1배 높은 Total Bias**. H_j ∝ 평균 보상 배분이 H-H0 편차를 더 극단적으로 만들어 예산 편향 증가. H-H0 정규화 항 도입이 필요함을 시사.
+RolloutAlloc이 SubsetSelect보다 **2.2–2.7배 높은 Total Bias** (219회에서도 일관 확인).
+$H_j \propto$ 평균 보상 배분이 $H-H_0$ 편차를 더 극단적으로 만들어 예산 편향 증가.
 
-**⑥ STV PSkip가 모든 지표에서 최우수**
+**⑥ STV×PSkip: 비GRPO 조합 중 최저 HL**
 
-STV×PSkip은 비GRPO 조합 중 최저 편향(2.45e-3)과 최저 HL(2.75e-3)을 동시에 달성. DAPO-style 필터링이 James-Stein 적응 혼합과 시너지를 내어 편향과 분산을 동시에 최소화.
+STV×PSkip은 비GRPO 조합 중 최저 HL(2.70e-3)을 달성. DAPO-style 필터링이 James-Stein 적응 혼합과 시너지를 내어 분산 프록시를 최소화.
 
 ### 실험 설계 (plans_cube_02.txt 기반)
 

@@ -37,7 +37,6 @@ from experiments.cube_sim import (
     compute_baseline_r, build_H, sample_rollouts, build_D_B,
     _compute_stv_lambda,
 )
-from cube.utils.probe import make_probe_vectors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,8 +168,7 @@ def run_experiment(args):
     csv_path = out_dir / f"{args.run_id}.csv"
     meta_path = out_dir / f"{args.run_id}_meta.json"
 
-    # ── Probe vectors (fixed for all experiments) ─────────────────────────────
-    # Build model first to get d
+    # ── Model ──────────────────────────────────────────────────────────────────
     model = ToyPolicy(
         input_dim=args.input_dim,
         hidden_dim=args.hidden_dim,
@@ -179,9 +177,8 @@ def run_experiment(args):
     ).to(device)
     d = model.n_params
     print(f"  Model params: d = {d}")
-
-    probe_vecs = make_probe_vectors(d, R=args.R, seed=args.probe_seed, device=device)
-    print(f"  Probe vectors: (R={args.R}, d={d}), seed={args.probe_seed}")
+    # Probe vectors are generated on-the-fly from seed (no (R,d) matrix stored).
+    print(f"  Probe seed: {args.probe_seed}  R={args.R}")
 
     # ── Data pool ─────────────────────────────────────────────────────────────
     data_pool = DataPool(
@@ -216,7 +213,7 @@ def run_experiment(args):
         json.dump(meta, f, indent=2)
 
     # ── Training & Logging Loop ───────────────────────────────────────────────
-    log_interval = args.num_train_steps // args.T  # every N steps → 1 checkpoint
+    log_interval = max(1, args.num_train_steps // args.T) if args.T > 0 else args.num_train_steps + 1
     total_start = time.time()
     checkpoint_idx = 0
 
@@ -236,12 +233,12 @@ def run_experiment(args):
                     data_pool=data_pool,
                     baseline=args.baseline,
                     budget=args.budget,
-                    probe_vecs=probe_vecs,
+                    R=args.R,
+                    probe_seed_base=args.probe_seed + step,
                     S=args.S,
                     K=args.K,
                     B=args.B,
                     N=args.N,
-                    probe_seed_base=args.probe_seed + step,
                     device=device,
                 )
             model.train()

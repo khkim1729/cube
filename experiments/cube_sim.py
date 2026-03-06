@@ -25,6 +25,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.func import grad, functional_call
 
+from cube.utils.probe import project_flat_grad
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Toy Policy Model
@@ -107,7 +109,8 @@ def compute_multi_weight_projs(
     prompts: torch.Tensor,        # (M, input_dim)
     answers: torch.Tensor,        # (M,) int64
     weight_vecs: list,            # list of n_w tensors, each (M,)
-    probe_vecs: torch.Tensor,     # (R, d)
+    R: int,                       # number of probe vectors
+    probe_seed: int,              # seed for on-the-fly probe generation
     device: str,
 ) -> list:
     """Compute probe projections via weighted backward passes.
@@ -116,12 +119,13 @@ def compute_multi_weight_projs(
         proj[r] = v_r . ∇_θ[Σ_m w_m log π(y_m | x_m)]
 
     Uses ONE shared forward pass + n_w backward passes (one per weight vector).
-    Formula: the weighted loss Σ_m w_m log π(y_m|x_m) has gradient = Σ_m w_m ∇_θ log π(y_m|x_m).
-    (For VLMs with variable-length sequences, replace batched forward with a per-rollout loop.)
+    Probe vectors v_r ~ N(0, I) are generated one at a time from probe_seed,
+    so the full (R, d) matrix is never stored in memory.
 
     Args:
         weight_vecs: list of n_w tensors each (M,) — e.g., [w_ghat, w_budget, ...]
-        probe_vecs:  (R, d) fixed probe vectors
+        R:           number of probe vectors
+        probe_seed:  random seed; each call with the same seed gives the same projections
 
     Returns:
         list of n_w tensors each (R,) — probe projections for each weight vector
@@ -134,6 +138,7 @@ def compute_multi_weight_projs(
     log_pi    = log_probs[torch.arange(len(answers), device=device), answers]   # (M,)
 
     # n_w backward passes: ∇_θ[Σ_m w_m log π(y_m|x_m)]
+    # Probe vectors are generated one at a time inside project_flat_grad (O(d) peak memory).
     results = []
     n_w = len(weight_vecs)
     for i, w in enumerate(weight_vecs):
@@ -143,8 +148,8 @@ def compute_multi_weight_projs(
             loss, model.parameters(),
             retain_graph=retain, create_graph=False,
         )
-        flat_g = torch.cat([g.flatten() for g in grads])  # (d,)
-        results.append(probe_vecs @ flat_g)                # (R,)
+        flat_g = torch.cat([g.flatten() for g in grads])          # (d,)
+        results.append(project_flat_grad(flat_g, R, probe_seed, device))  # (R,)
 
     return results
 
@@ -460,12 +465,12 @@ def measure_checkpoint(
     data_pool: DataPool,
     baseline: str,
     budget: str,
-    probe_vecs: torch.Tensor,   # (R, d)
+    R: int,
+    probe_seed_base: int,
     S: int,
     K: int,
     B: int,
     N: int,
-    probe_seed_base: int,
     device: str,
 ) -> CheckpointMetrics:
     """Implements plans_cube_02.txt §2 measurement protocol exactly.
@@ -474,8 +479,10 @@ def measure_checkpoint(
       For each k in [K]: sample Y_{s,k} ~ π_θ(·|X_s)
         Compute 5 projections p^1..4, q (each: (R,))
         Store HL_F^2, norms
+
+    Probe vectors v_r ~ N(0, I) are generated one at a time from probe_seed_base
+    inside compute_multi_weight_projs. The full (R, d) matrix is never stored.
     """
-    R = probe_vecs.shape[0]
     M = B * N
 
     p1_buf = torch.zeros(S, K, R, device=device)
@@ -533,8 +540,9 @@ def measure_checkpoint(
                 rollouts.prompts,   # (M, d_in)
                 rollouts.answers,   # (M,)
                 [w1, w2, w3, w4, w5],
-                probe_vecs,         # (R, d)
-                device,
+                R=R,
+                probe_seed=probe_seed_base + flat_idx,
+                device=device,
             )
 
             p1_buf[s, k] = p1
