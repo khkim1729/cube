@@ -178,7 +178,7 @@ def measure_checkpoint_vlm(
                 model, processor, rollouts,
                 [w1, w2, w3, w4, w5],
                 R=R,
-                probe_seed=probe_seed + flat_idx,
+                probe_seed=probe_seed,
                 device=device,
             )
             model.eval()
