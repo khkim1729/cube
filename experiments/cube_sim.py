@@ -541,7 +541,7 @@ def measure_checkpoint(
                 rollouts.answers,   # (M,)
                 [w1, w2, w3, w4, w5],
                 R=R,
-                probe_seed=probe_seed_base + flat_idx,
+                probe_seed=probe_seed_base,
                 device=device,
             )
 

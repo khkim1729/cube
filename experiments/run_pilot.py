@@ -234,7 +234,7 @@ def run_experiment(args):
                     baseline=args.baseline,
                     budget=args.budget,
                     R=args.R,
-                    probe_seed_base=args.probe_seed + step,
+                    probe_seed_base=args.probe_seed,
                     S=args.S,
                     K=args.K,
                     B=args.B,
