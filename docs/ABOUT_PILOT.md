@@ -39,16 +39,17 @@ This "pilot-first" approach was chosen deliberately:
    - On-the-fly probe projection via `project_flat_grad` (no `(R,d)` matrix)
    - Bessel-corrected bias-subtracted across-variance estimate
 
-3. **Pending update.** The `cube/` package modules (`bias.py`, `variance.py`,
-   `run_experiment.py`) will be updated to match the pilot once the pilot
-   experiments are complete and the paper results are locked.
-   Specifically:
-   - `cube/metrics/bias.py`: `compute_bias_components` uses explicit `Psi`
-     and `A_B` matrices; will be replaced with the matrix-free approach.
-   - `cube/metrics/variance.py`: `compute_HL_proxy` uses the full `(M,M)` `L`;
-     will be replaced with the analytical closed form.
-   - `experiments/run_experiment.py`: placeholder logic will be replaced with
-     the same training loop and measurement protocol as `run_pilot.py`.
+3. **Update complete.** The `cube/` package modules and `run_experiment.py`
+   have now been updated to match the pilot approach:
+   - `cube/metrics/bias.py`: `compute_bias` and `decompose_bias` now take
+     pre-projected `(S, K, R)` tensors directly. `compute_bias_components`
+     (which used explicit `Psi` and `A_B` matrices) has been removed.
+   - `cube/metrics/variance.py`: `compute_HL_proxy` now uses the analytical
+     closed form (no `(M,M)` `L` matrix). `compute_sourcewise_trace`
+     (which used `Psi` and `L` matrices) has been removed.
+   - `experiments/run_experiment.py`: updated to use the new metric APIs.
+     Placeholder gradient samples remain `(S, K, R)` tensors; the real
+     VLM training loop is implemented in `run_vlm.py`.
 
 ## Code Fix (probe vectors)
 
@@ -73,6 +74,6 @@ approach from the beginning.
 | `experiments/run_pilot.py` | Complete, 264+ runs validated |
 | `experiments/run_vlm.py` | Complete, mirrors `run_pilot.py` for Qwen2-VL-7B + LoRA |
 | `cube/utils/probe.py` | Updated: `project_flat_grad` (on-the-fly, O(d) memory) |
-| `experiments/run_experiment.py` | Placeholder — probe_vecs updated; full logic pending |
-| `cube/metrics/bias.py` | Early sketch — pending update to matrix-free approach |
-| `cube/metrics/variance.py` | Variance decomposition correct; `HL_proxy` uses matrix form |
+| `experiments/run_experiment.py` | Updated metric APIs; VLM training loop in `run_vlm.py` |
+| `cube/metrics/bias.py` | Updated: matrix-free approach, `(S,K,R)` probe projections |
+| `cube/metrics/variance.py` | Updated: analytical `HL_proxy`, no `(M,M)` L matrix |

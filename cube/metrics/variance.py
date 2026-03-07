@@ -6,14 +6,11 @@ Implements variance decomposition (Section 5 of the paper):
     Cov(g_hat) = E[Cov(g_hat | X)] + Cov(E[g_hat | X])
                = Within-minibatch Cov  +  Across-minibatch (prompt-mixture) Cov
 
-The within-minibatch term is further decomposed:
-    Cov(g_hat | X) = E[Cov(g_hat | X, G) | X] + Cov(E[g_hat | X, G] | X)
-                   = Conditional Amplification  +  Operator Randomness
-
 Key proxy (Theorem 2 bound):
     tr Cov(g_hat | X, G) <= ||Sigma_r||_2 * ||Psi||_2^2 * ||HL||_F^2
 
 Lightweight proxy: ||HL||_F^2 tracks the variance trend across training steps.
+Computed analytically (no M×M L matrix needed).
 
 Monte Carlo estimation uses:
   S: number of minibatch samples
@@ -21,20 +18,74 @@ Monte Carlo estimation uses:
   R: number of probe vectors for scalarization via Tr(Cov) = E[||v^T (g-Eg)||^2]
 """
 
-from typing import Dict
+from typing import Dict, Optional
 import torch
 
 
 def compute_HL_proxy(
-    H: torch.Tensor,   # (M,) diagonal of budget matrix
-    L: torch.Tensor,   # (M, M) residual operator L = D_B(I - A_B)
+    baseline: str,
+    rewards: torch.Tensor,                    # (M,)
+    B: int,
+    N: int,
+    H: torch.Tensor,                          # (M,) budget diagonal
+    d_B: torch.Tensor,                        # (M,) D_B diagonal
+    lambdas: Optional[torch.Tensor] = None,   # (B,) STV shrinkage (pre-computed)
 ) -> torch.Tensor:
-    """Compute ||HL||_F^2 as the lightweight variance proxy.
+    """Compute ||HL||_F^2 analytically (no M×M L matrix needed).
 
-    HL_F^2 = ||diag(H) @ L||_F^2 = sum_{t,m} (h_t * L_{tm})^2
+    L = D_B(I - A_B), so:
+        ||HL||_F^2 = Σ_t (H[t] * d_B[t])^2 * ||(I-A_B)_t||^2
+
+    Per-row squared norms of (I - A_B):
+        REINFORCE:  1
+        GRPO:       (N-1)/N
+        RLOO:       N/(N-1)
+        STV:        1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+
+    Args:
+        baseline: 'reinforce', 'grpo', 'rloo', or 'stv'
+        rewards:  (M,) reward vector (used only for STV lambda computation)
+        B:        number of prompts
+        N:        rollouts per prompt
+        H:        (M,) diagonal of budget matrix
+        d_B:      (M,) diagonal of D_B normalization matrix
+        lambdas:  (B,) pre-computed STV lambdas (computed from rewards if None for STV)
+
+    Returns:
+        scalar tensor: ||HL||_F^2
     """
-    HL = H.unsqueeze(1) * L   # element-wise row scaling: (M, M)
-    return (HL ** 2).sum()
+    device = rewards.device
+    M = B * N
+    row_sq = torch.zeros(M, device=device)
+
+    if baseline == "reinforce":
+        row_sq.fill_(1.0)
+
+    elif baseline == "grpo":
+        row_sq.fill_((N - 1) / N if N > 1 else 0.0)
+
+    elif baseline == "rloo":
+        row_sq.fill_(N / (N - 1) if N > 1 else 1.0)
+
+    elif baseline == "stv":
+        if lambdas is None:
+            from cube.estimators.stv import _compute_lambda
+            lambdas = _compute_lambda(rewards, B, N)
+        for j in range(B):
+            s, e = j * N, (j + 1) * N
+            lam_j = lambdas[j].item()
+            # ||row_t||^2 = 1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+            val = 1.0
+            if N > 1:
+                val += (1 - lam_j) ** 2 / (N - 1)
+            if B > 1:
+                val += lam_j ** 2 / ((B - 1) * N)
+            row_sq[s:e] = val
+
+    else:
+        raise ValueError(f"Unknown baseline: {baseline}")
+
+    return ((H * d_B) ** 2 * row_sq).sum()
 
 
 def compute_variance(
@@ -105,9 +156,7 @@ def decompose_variance(
     within_total = g_hat_samples.var(dim=1, unbiased=False).mean(0)  # (R,)
 
     # Operator randomness: Var over rollout resamples of conditional mean
-    # Here we approximate: treat each (s,k) pair as giving a sample of G
-    # For each s: mean over K → this is our E[g|X,G] approximation per resample
-    cond_mean_sK = G_samples.mean(dim=1)   # (S, R) ← E[g|X, realized G]
+    cond_mean_sK = G_samples.mean(dim=1)   # (S, R)
     operator_rand = cond_mean_sK.var(dim=0, unbiased=False)  # (R,)
 
     cond_amp = (within_total - operator_rand).clamp(min=0.0)
@@ -116,19 +165,3 @@ def decompose_variance(
         "cond_amplification":  cond_amp,
         "operator_randomness": operator_rand,
     }
-
-
-def compute_sourcewise_trace(
-    Psi: torch.Tensor,        # (d, M) score matrix
-    H: torch.Tensor,          # (M,)   diagonal of H
-    L: torch.Tensor,          # (M, M) residual operator
-    sigma2: torch.Tensor,     # (M,)   reward variances
-) -> torch.Tensor:
-    """Compute tr Cov(g|X,G) = sum_m sigma_m^2 * ||g_m||^2 (Proposition 1).
-
-    g_m = Psi H L e_m
-    """
-    HL = H.unsqueeze(1) * L          # (M, M)
-    G = Psi @ HL                     # (d, M)  ← G[:,m] = Psi H L e_m
-    g_norms_sq = (G ** 2).sum(0)     # (M,)
-    return (sigma2 * g_norms_sq).sum()

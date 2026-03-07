@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from cube.estimators import REINFORCE, GRPO, RLOO, STV
 from cube.budgets import PromptSkipBudget, RolloutAllocBudget, SubsetSelectBudget
 from cube.metrics import (
-    compute_bias, decompose_bias, compute_bias_components,
+    compute_bias, decompose_bias,
     compute_variance, decompose_variance, compute_HL_proxy,
 )
 from cube.utils import project_flat_grad
@@ -110,17 +110,17 @@ def run_bias_variance_sweep(config: dict, run_dir: Path):
 
     For each combo, simulate S x K gradient samples and compute metrics.
     Results are saved as JSON files in run_dir/metrics/.
+
+    Probe vectors v_r ~ N(0, I) are generated one at a time via
+    project_flat_grad(flat_g, R, seed, device) — no (R, d) matrix stored.
     """
     R = config["R"]
     S = config["S"]
     K = config["K"]
     M = config["M"]
     B = config["B"]
+    N = M // B
     probe_seed = config["probe_seed"]
-    # Probe vectors are NOT materialized as an (R, d) matrix.
-    # Instead, project_flat_grad(flat_g, R, seed, device) generates each
-    # v_r ~ N(0, I_d) on-the-fly and accumulates the dot product.
-    # This keeps peak extra memory at O(d) instead of O(R * d).
 
     results = {}
 
@@ -129,31 +129,38 @@ def run_bias_variance_sweep(config: dict, run_dir: Path):
             key = f"{bl_name}_x_{budget_name}"
             print(f"  Running combo: {key}")
 
-            # Simulate gradient samples (placeholder for real training loop).
-            # In the real implementation, compute flat_g from backward passes
-            # and project via: proj = project_flat_grad(flat_g, R, probe_seed, device)
+            # Placeholder projected gradient samples (S, K, R).
+            # In the real implementation, these are obtained from:
+            #   1. generate_rollouts_vlm() → Rollouts
+            #   2. compute_multi_weight_projs() with 5 weight vectors
+            #   3. Each weight vector → 1 backward pass → project_flat_grad()
             # This avoids storing the full (R, d) probe matrix.
             torch.manual_seed(hash(key) % (2**31))
-            g_hat_samples = torch.randn(S, K, R)  # projected gradients (placeholder)
-            g_ref_samples = torch.randn(S * K, R)
+            p1 = torch.randn(S, K, R)  # projected g_hat
+            p2 = torch.randn(S, K, R)  # projected budget bias
+            p3 = torch.randn(S, K, R)  # projected baseline bias
+            p4 = torch.randn(S, K, R)  # projected fusion bias
+            q  = torch.randn(S, K, R)  # projected g_ref
 
-            # Bias metrics
-            bias_metrics = compute_bias(
-                g_hat_samples.reshape(-1, R),
-                g_ref_samples,
-                torch.eye(R),  # probes = identity when already projected
-            )
+            # Bias metrics (operates on (S, K, R) projected tensors)
+            bias_metrics = compute_bias(p1, q)
+            bias_decomp  = decompose_bias(p2, p3, p4)
 
-            # Variance metrics
-            var_metrics = compute_variance(g_hat_samples)
+            # Variance metrics (operates on (S, K, R) projected tensors)
+            var_metrics = compute_variance(p1)
 
-            # HL proxy
-            L = torch.eye(M) - torch.ones(M, M) / M  # placeholder STV L
-            H = torch.ones(M) / (B * (M // B))
-            hl_proxy = compute_HL_proxy(H, L).item()
+            # HL proxy: analytical ||HL||_F^2, no M×M L matrix needed
+            r_placeholder = torch.zeros(M)         # placeholder rewards
+            H_diag  = torch.ones(M) / (B * N)      # uniform H (none-budget)
+            d_B_diag = torch.ones(M)               # uniform D_B
+            hl_proxy = compute_HL_proxy(
+                bl_name, r_placeholder, B, N, H_diag, d_B_diag
+            ).item()
 
             results[key] = {
                 "total_bias_norm": bias_metrics["total_bias_proj"].norm().item(),
+                "budget_bias_mean": bias_decomp["budget_bias_proj"].abs().mean().item(),
+                "fusion_bias_mean": bias_decomp["fusion_bias_proj"].abs().mean().item(),
                 "total_var": var_metrics["total_var"].mean().item(),
                 "within_var": var_metrics["within_var"].mean().item(),
                 "across_var": var_metrics["across_var"].mean().item(),
