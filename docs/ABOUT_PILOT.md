@@ -4,9 +4,9 @@
 
 > `run_experiment.py` still has most of its core logic as placeholders,
 > and the correctness fixes that are properly reflected in the pilot
-> are not yet reflected in the `cube/` module files
-> (e.g., the functions in `cube/metrics/bias.py` compute things
-> differently — and incorrectly — compared to the pilot).
+> are not yet reflected in the `cube/` module files.
+> For example, the functions in `cube/metrics/bias.py` compute things
+> differently — and incorrectly — compared to the pilot.
 >
 > Is the plan to fully complete and validate the pilot first,
 > and then implement `run_experiment.py` and the `cube/` modules?
@@ -50,13 +50,29 @@ This "pilot-first" approach was chosen deliberately:
    - `experiments/run_experiment.py`: placeholder logic will be replaced with
      the same training loop and measurement protocol as `run_pilot.py`.
 
+## Code Fix (probe vectors)
+
+The probe vector issue in `run_experiment.py` has been addressed.
+Previously `run_experiment.py` called `make_probe_vectors(d, R, seed)` which
+materialized a full `(R, d)` matrix in memory. This is now updated:
+
+- **Removed**: `from cube.utils import make_probe_vectors`
+- **Added**: `from cube.utils import project_flat_grad`
+- The placeholder sweep now documents that real gradient projections should use
+  `project_flat_grad(flat_g, R, probe_seed, device)`, which generates each
+  `v_r ~ N(0, I_d)` on-the-fly and keeps peak extra memory at `O(d)`.
+
+The pilot (`cube_sim.py` + `run_pilot.py`) has used this memory-efficient
+approach from the beginning.
+
 ## Current Status (as of 2026-03)
 
 | Component | Status |
 |-----------|--------|
 | `experiments/cube_sim.py` | Complete, paper-correct |
-| `experiments/run_pilot.py` | Complete, 174+ runs validated |
-| `cube/metrics/bias.py` | Early sketch — pending update |
+| `experiments/run_pilot.py` | Complete, 264+ runs validated |
+| `experiments/run_vlm.py` | Complete, mirrors `run_pilot.py` for Qwen2-VL-7B + LoRA |
+| `cube/utils/probe.py` | Updated: `project_flat_grad` (on-the-fly, O(d) memory) |
+| `experiments/run_experiment.py` | Placeholder — probe_vecs updated; full logic pending |
+| `cube/metrics/bias.py` | Early sketch — pending update to matrix-free approach |
 | `cube/metrics/variance.py` | Variance decomposition correct; `HL_proxy` uses matrix form |
-| `experiments/run_experiment.py` | Placeholder — pending update |
-| `experiments/run_vlm.py` | New, mirrors `run_pilot.py` for VLMs |

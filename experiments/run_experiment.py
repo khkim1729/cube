@@ -48,7 +48,7 @@ from cube.metrics import (
     compute_bias, decompose_bias, compute_bias_components,
     compute_variance, decompose_variance, compute_HL_proxy,
 )
-from cube.utils import make_probe_vectors
+from cube.utils import project_flat_grad
 
 
 # Default hyperparameters (from plans_cube_02.txt)
@@ -116,9 +116,11 @@ def run_bias_variance_sweep(config: dict, run_dir: Path):
     K = config["K"]
     M = config["M"]
     B = config["B"]
-    d_probe = 4096  # representative probe dimension
-
-    probe_vecs = make_probe_vectors(d_probe, R=R, seed=config["probe_seed"])
+    probe_seed = config["probe_seed"]
+    # Probe vectors are NOT materialized as an (R, d) matrix.
+    # Instead, project_flat_grad(flat_g, R, seed, device) generates each
+    # v_r ~ N(0, I_d) on-the-fly and accumulates the dot product.
+    # This keeps peak extra memory at O(d) instead of O(R * d).
 
     results = {}
 
@@ -127,10 +129,12 @@ def run_bias_variance_sweep(config: dict, run_dir: Path):
             key = f"{bl_name}_x_{budget_name}"
             print(f"  Running combo: {key}")
 
-            # Simulate gradient samples (placeholder for real training loop)
-            # In full experiments, replace with actual rollout generation
+            # Simulate gradient samples (placeholder for real training loop).
+            # In the real implementation, compute flat_g from backward passes
+            # and project via: proj = project_flat_grad(flat_g, R, probe_seed, device)
+            # This avoids storing the full (R, d) probe matrix.
             torch.manual_seed(hash(key) % (2**31))
-            g_hat_samples = torch.randn(S, K, R)  # projected gradients
+            g_hat_samples = torch.randn(S, K, R)  # projected gradients (placeholder)
             g_ref_samples = torch.randn(S * K, R)
 
             # Bias metrics
