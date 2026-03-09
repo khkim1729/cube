@@ -161,14 +161,27 @@ def compute_multi_weight_projs(
 @dataclass
 class Rollouts:
     """Container for a single (X, Y) minibatch."""
-    prompts: torch.Tensor       # (B, input_dim)
-    golds: torch.Tensor         # (B,)
-    answers: torch.Tensor       # (M,) = (B*N,) int64
-    rewards: torch.Tensor       # (M,) float
-    prompt_ids: torch.Tensor    # (M,) which prompt [0..B)
-    N_per_prompt: int           # uniform N_j = N
+    prompts: torch.Tensor           # (M, input_dim)
+    golds: torch.Tensor             # (M,)
+    answers: torch.Tensor           # (M,) int64
+    rewards: torch.Tensor           # (M,) float
+    prompt_ids: torch.Tensor        # (M,) which prompt [0..B)
+    N_per_prompt: int               # uniform N_j = N (or base probe N for variable)
     B: int
     M: int
+    N_list: Optional[List[int]] = None  # per-prompt counts; None = uniform N_per_prompt
+
+    def prompt_slice(self, j: int) -> slice:
+        """Return flat-array slice for prompt j."""
+        if self.N_list is None:
+            N = self.N_per_prompt
+            return slice(j * N, (j + 1) * N)
+        offset = sum(self.N_list[:j])
+        return slice(offset, offset + self.N_list[j])
+
+    def prompt_N(self, j: int) -> int:
+        """Return rollout count for prompt j."""
+        return self.N_per_prompt if self.N_list is None else self.N_list[j]
 
 
 def sample_rollouts(
@@ -186,10 +199,11 @@ def sample_rollouts(
     with torch.no_grad():
         logits = model(prompts)                              # (B, n_classes)
         probs = F.softmax(logits, dim=-1)                    # (B, n_classes)
-        # Sample N answers per prompt
+        # Sample N answers per prompt (generator=rng for reproducibility)
         answers_2d = torch.multinomial(
             probs.repeat_interleave(N, dim=0),               # (M, n_classes)
             num_samples=1,
+            generator=rng,
         ).squeeze(1)                                         # (M,)
         # Rewards: 1 if answer == gold (verifiable reward)
         golds_rep = golds.repeat_interleave(N)               # (M,)
@@ -209,12 +223,109 @@ def sample_rollouts(
     )
 
 
+def sample_rollouts_var(
+    model: ToyPolicy,
+    prompts: torch.Tensor,  # (B, input_dim)
+    golds: torch.Tensor,    # (B,)
+    N: int,                 # base rollout count (for uniform reference)
+    M: int,                 # total rollout budget
+    rng: torch.Generator,
+    device: str,
+    n_probe: int = 4,       # probe rollouts per prompt for allocation
+) -> Rollouts:
+    """Sample variable N_j rollouts per prompt, allocated by reward variance.
+
+    Implements Adaptive Rollout Allocation:
+      1. Sample n_probe rollouts per prompt to estimate per-prompt accuracy.
+      2. Compute weight_j = acc_j * (1 - acc_j) * 4  (Bernoulli variance proxy,
+         maximized when acc_j = 0.5, i.e., prompt is near the learning boundary).
+      3. Allocate N_j ∝ weight_j with sum(N_j) = M, at least 1 per prompt.
+      4. Sample the actual N_j rollouts per prompt for training/measurement.
+    """
+    B = prompts.shape[0]
+
+    # ── Step 1: probe rollouts ────────────────────────────────────────────────
+    with torch.no_grad():
+        logits = model(prompts)                              # (B, n_classes)
+        probs = F.softmax(logits, dim=-1)                    # (B, n_classes)
+        probe_answers = torch.multinomial(
+            probs.repeat_interleave(n_probe, dim=0),         # (B*n_probe, n_classes)
+            num_samples=1, generator=rng,
+        ).squeeze(1)                                         # (B*n_probe,)
+        golds_probe = golds.repeat_interleave(n_probe)
+        probe_rewards = (probe_answers == golds_probe).float()
+
+    # ── Step 2: compute allocation weights ───────────────────────────────────
+    weights = torch.zeros(B, device=device)
+    for j in range(B):
+        acc_j = probe_rewards[j * n_probe:(j + 1) * n_probe].mean()
+        weights[j] = acc_j * (1.0 - acc_j) * 4.0           # Bernoulli variance × 4
+
+    if weights.sum() < 1e-8:                                 # all prompts trivial
+        weights = torch.ones(B, device=device)
+
+    # ── Step 3: compute N_j with sum(N_j) == M, min 1 per prompt ────────────────
+    weights = weights / weights.sum()
+    # Guarantee at least 1 per prompt; distribute remaining M-B proportionally
+    remaining = M - B
+    extra = [int(round(w.item() * remaining)) for w in weights]
+    diff = remaining - sum(extra)
+    if diff != 0:
+        sorted_idx = sorted(range(B), key=lambda j: weights[j].item(), reverse=True)
+        for i in range(abs(diff)):
+            j = sorted_idx[i % B]
+            extra[j] = max(0, extra[j] + (1 if diff > 0 else -1))
+    N_list = [1 + e for e in extra]  # guaranteed: sum == M, each >= 1
+    M_actual = M  # always equals M by construction
+
+    # ── Step 4: sample N_j actual rollouts per prompt ────────────────────────
+    all_prompts_list, all_golds_list, all_answers_list = [], [], []
+    all_rewards_list, all_ids_list = [], []
+
+    with torch.no_grad():
+        logits = model(prompts)                              # (B, n_classes)
+        probs = F.softmax(logits, dim=-1)
+
+        for j in range(B):
+            N_j = N_list[j]
+            ans_j = torch.multinomial(
+                probs[j:j + 1].expand(N_j, -1),
+                num_samples=1, generator=rng,
+            ).squeeze(1)                                     # (N_j,)
+            r_j = (ans_j == golds[j]).float()
+            all_prompts_list.append(prompts[j:j + 1].expand(N_j, -1))
+            all_golds_list.append(golds[j:j + 1].expand(N_j))
+            all_answers_list.append(ans_j)
+            all_rewards_list.append(r_j)
+            all_ids_list.append(torch.full((N_j,), j, device=device))
+
+    return Rollouts(
+        prompts=torch.cat(all_prompts_list),
+        golds=torch.cat(all_golds_list),
+        answers=torch.cat(all_answers_list),
+        rewards=torch.cat(all_rewards_list),
+        prompt_ids=torch.cat(all_ids_list),
+        N_per_prompt=N,         # base N (uniform reference)
+        B=B,
+        M=M_actual,
+        N_list=N_list,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Baseline Operators (A_B matrices)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _compute_stv_lambda(rewards: torch.Tensor, B: int, N: int) -> torch.Tensor:
-    """Per-prompt James-Stein shrinkage λ_j ∈ [0,1] for STV."""
+def _compute_stv_lambda(
+    rewards: torch.Tensor,
+    B: int,
+    N: int,
+    rollouts: Optional["Rollouts"] = None,
+) -> torch.Tensor:
+    """Per-prompt James-Stein shrinkage λ_j ∈ [0,1] for STV.
+
+    Supports variable N_j when rollouts.N_list is set.
+    """
     device = rewards.device
     lambdas = torch.zeros(B, device=device)
     if B <= 1:
@@ -222,10 +333,13 @@ def _compute_stv_lambda(rewards: torch.Tensor, B: int, N: int) -> torch.Tensor:
     mu = torch.zeros(B, device=device)
     var_r = torch.zeros(B, device=device)
     for j in range(B):
-        r_j = rewards[j * N:(j + 1) * N]
+        sl = rollouts.prompt_slice(j) if rollouts is not None and rollouts.N_list is not None \
+             else slice(j * N, (j + 1) * N)
+        N_j = rollouts.prompt_N(j) if rollouts is not None and rollouts.N_list is not None else N
+        r_j = rewards[sl]
         mu[j] = r_j.mean()
-        var_r[j] = r_j.var(unbiased=True) if N > 1 else torch.zeros(1, device=device).squeeze()
-    var_mu = var_r / N
+        var_r[j] = r_j.var(unbiased=True) if N_j > 1 else torch.zeros(1, device=device).squeeze()
+    var_mu = var_r / N   # use base N as reference (conservative)
     for j in range(B):
         mu_others = torch.cat([mu[:j], mu[j + 1:]])
         var_mu_others = torch.cat([var_mu[:j], var_mu[j + 1:]])
@@ -244,49 +358,55 @@ def compute_baseline_r(
     B: int,
     N: int,
     lambdas: Optional[torch.Tensor] = None,   # (B,) STV lambdas, pre-computed
+    rollouts: Optional["Rollouts"] = None,    # for variable N_j support
 ) -> torch.Tensor:
     """Compute A_B @ r directly via per-rollout summation (no M×M matrix).
 
     Avoids building the (M, M) A_B matrix entirely, saving O(M^2) memory.
-    For VLMs where M can be large, this is critical.
+    Supports variable N_j per prompt when rollouts.N_list is set.
 
     Returns (M,) vector = A_B r.
     """
-    M = B * N
+    M = rewards.shape[0]
     device = rewards.device
     A_B_r = torch.zeros(M, device=device)
+
+    def _sl(j):
+        return rollouts.prompt_slice(j) if rollouts is not None and rollouts.N_list is not None \
+               else slice(j * N, (j + 1) * N)
+
+    def _nj(j):
+        return rollouts.prompt_N(j) if rollouts is not None and rollouts.N_list is not None else N
 
     if baseline == "reinforce":
         return A_B_r  # A_B = 0
 
     elif baseline == "grpo":
-        # A_B r = group mean repeated: [mean(r_j), ..., mean(r_j)] for each j
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            A_B_r[s:e] = rewards[s:e].mean()
+            sl = _sl(j)
+            A_B_r[sl] = rewards[sl].mean()
 
     elif baseline == "rloo":
-        # A_B r = LOO mean: (sum_j - r_{j,i}) / (N-1) for each (j, i)
-        if N > 1:
-            for j in range(B):
-                s, e = j * N, (j + 1) * N
-                r_j = rewards[s:e]
-                A_B_r[s:e] = (r_j.sum() - r_j) / (N - 1)
+        for j in range(B):
+            sl = _sl(j)
+            N_j = _nj(j)
+            r_j = rewards[sl]
+            if N_j > 1:
+                A_B_r[sl] = (r_j.sum() - r_j) / (N_j - 1)
 
     elif baseline == "stv":
-        # A_B r = (1-λ_j) * RLOO_j + λ_j * BLOO_j
         if lambdas is None:
-            lambdas = _compute_stv_lambda(rewards, B, N)
+            lambdas = _compute_stv_lambda(rewards, B, N, rollouts)
         total_sum = rewards.sum()
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            r_j = rewards[s:e]
+            sl = _sl(j)
+            N_j = _nj(j)
+            r_j = rewards[sl]
             lam_j = lambdas[j].item()
-            # Within-prompt RLOO: (Σ r_j - r_{j,i}) / (N-1)
-            rloo_j = (r_j.sum() - r_j) / (N - 1) if N > 1 else torch.zeros(N, device=device)
-            # Cross-prompt BLOO: mean reward of all other prompts
-            bloo_scalar = (total_sum - r_j.sum()) / ((B - 1) * N) if B > 1 else 0.0
-            A_B_r[s:e] = (1 - lam_j) * rloo_j + lam_j * bloo_scalar
+            rloo_j = (r_j.sum() - r_j) / (N_j - 1) if N_j > 1 \
+                     else torch.zeros(N_j, device=device)
+            bloo_scalar = (total_sum - r_j.sum()) / ((B - 1) * N_j) if B > 1 else 0.0
+            A_B_r[sl] = (1 - lam_j) * rloo_j + lam_j * bloo_scalar
 
     return A_B_r
 
@@ -295,20 +415,19 @@ def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: flo
     """Build per-rollout normalization scale (diagonal of D_B).
 
     Returns diagonal entries only (M,): 1.0 for no normalization, σ^{-1} for GRPO-style.
+    Supports variable N_j when rollouts.N_list is set.
     """
     M = rollouts.M
     B = rollouts.B
-    N = rollouts.N_per_prompt
     device = rewards.device
     d = torch.ones(M, device=device)
 
     if baseline == "grpo":
-        # Per-prompt std normalization (D_B is reward-dependent)
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            r_j = rewards[s:e]
+            sl = rollouts.prompt_slice(j)
+            r_j = rewards[sl]
             sigma = r_j.std(unbiased=False).clamp(min=eps)
-            d[s:e] = 1.0 / sigma
+            d[sl] = 1.0 / sigma
 
     return d  # D_B = diag(d)
 
@@ -351,17 +470,23 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
         return H, H0
 
     elif budget == "rollout_alloc":
-        # Proportional to per-prompt reward mean (more rollouts to promising prompts)
-        means = torch.tensor([
-            rewards[j * N:(j + 1) * N].mean().clamp(min=0.05).item()
-            for j in range(B)
-        ], device=device)
-        means = means / means.mean()  # normalize to mean=1
-
         H = torch.zeros(M, device=device)
-        for j in range(B):
-            s, e = j * N, (j + 1) * N
-            H[s:e] = (1.0 / N) * means[j] / B
+        if rollouts.N_list is not None:
+            # Variable rollout allocation: actual N_j were sampled; H = 1/(N_j * B)
+            for j in range(B):
+                sl = rollouts.prompt_slice(j)
+                N_j = rollouts.prompt_N(j)
+                H[sl] = 1.0 / (N_j * B)
+        else:
+            # Uniform N: weight proportionally to per-prompt reward mean
+            means = torch.tensor([
+                rewards[j * N:(j + 1) * N].mean().clamp(min=0.05).item()
+                for j in range(B)
+            ], device=device)
+            means = means / means.mean()  # normalize to mean=1
+            for j in range(B):
+                s, e = j * N, (j + 1) * N
+                H[s:e] = (1.0 / N) * means[j] / B
 
         return H, H0
 
@@ -396,6 +521,7 @@ def compute_HL_sq(
     H: torch.Tensor,                          # (M,) budget diagonal
     d_B: torch.Tensor,                        # (M,) D_B diagonal
     lambdas: Optional[torch.Tensor] = None,   # (B,) STV lambdas, pre-computed
+    rollouts: Optional["Rollouts"] = None,    # for variable N_j support
 ) -> float:
     """Compute ||diag(H) L||_F^2 analytically (no M×M L matrix).
 
@@ -404,36 +530,49 @@ def compute_HL_sq(
 
     Per-row squared norms of (I - A_B):
         REINFORCE:  1
-        GRPO:       (N-1)/N
-        RLOO:       N/(N-1)
-        STV:        1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+        GRPO:       (N_j-1)/N_j  per prompt
+        RLOO:       N_j/(N_j-1)  per prompt
+        STV:        1 + (1-λ_j)^2/(N_j-1) + λ_j^2/((B-1)N_j)
+    Supports variable N_j when rollouts.N_list is set.
     """
     device = rewards.device
-    M = B * N
+    M = rewards.shape[0]
     row_sq = torch.zeros(M, device=device)
+
+    def _sl(j):
+        return rollouts.prompt_slice(j) if rollouts is not None and rollouts.N_list is not None \
+               else slice(j * N, (j + 1) * N)
+
+    def _nj(j):
+        return rollouts.prompt_N(j) if rollouts is not None and rollouts.N_list is not None else N
 
     if baseline == "reinforce":
         row_sq.fill_(1.0)
 
     elif baseline == "grpo":
-        row_sq.fill_((N - 1) / N if N > 1 else 0.0)
+        for j in range(B):
+            N_j = _nj(j)
+            row_sq[_sl(j)] = (N_j - 1) / N_j if N_j > 1 else 0.0
 
     elif baseline == "rloo":
-        row_sq.fill_(N / (N - 1) if N > 1 else 1.0)
+        for j in range(B):
+            N_j = _nj(j)
+            row_sq[_sl(j)] = N_j / (N_j - 1) if N_j > 1 else 1.0
 
     elif baseline == "stv":
         if lambdas is None:
-            lambdas = _compute_stv_lambda(rewards, B, N)
+            lambdas = _compute_stv_lambda(rewards, B, N, rollouts)
         for j in range(B):
-            s, e = j * N, (j + 1) * N
+            sl = _sl(j)
+            N_j = _nj(j)
             lam_j = lambdas[j].item()
-            # ||row_t||^2 = 1 + (1-λ_j)^2/(N-1) + λ_j^2/((B-1)N)
+            # ||row_t||^2 = 1 + (1-λ_j)^2/(N_j-1) + λ_j^2/((B-1)*N_j)
             val = 1.0
-            if N > 1:
-                val += (1 - lam_j) ** 2 / (N - 1)
+            if N_j > 1:
+                val += (1 - lam_j) ** 2 / (N_j - 1)
             if B > 1:
-                val += lam_j ** 2 / ((B - 1) * N)
-            row_sq[s:e] = val
+                val += lam_j ** 2 / ((B - 1) * N_j)
+            row_sq[sl] = val
 
     return ((H * d_B) ** 2 * row_sq).sum().item()
 
@@ -507,8 +646,12 @@ def measure_checkpoint(
 
         for k in range(K):
             # Sample rollouts Y_{s,k}
-            rollouts = sample_rollouts(model, prompts_s, golds_s, N, rng, device)
-            r = rollouts.rewards  # (M,)
+            # rollout_alloc: sample variable N_j per prompt (actual allocation)
+            if budget == "rollout_alloc":
+                rollouts = sample_rollouts_var(model, prompts_s, golds_s, N, M, rng, device)
+            else:
+                rollouts = sample_rollouts(model, prompts_s, golds_s, N, rng, device)
+            r = rollouts.rewards  # (M_actual,)
 
             # Build operators
             d_B = build_D_B(rollouts, baseline, r)         # (M,) diagonal of D_B
@@ -516,11 +659,11 @@ def measure_checkpoint(
             delta_H = H - H0                               # (M,)
 
             # Compute STV lambdas once (reused by compute_baseline_r and compute_HL_sq)
-            lambdas = _compute_stv_lambda(r, B, N) if baseline == "stv" else None
+            lambdas = _compute_stv_lambda(r, B, N, rollouts) if baseline == "stv" else None
 
             # Advantage vectors (matrix-free: direct summation, no M×M A_B)
-            A_B_r   = compute_baseline_r(baseline, r, B, N, lambdas)  # (M,) = A_B r
-            tilde_a = d_B * (r - A_B_r)                               # (M,) = D_B(I-A_B)r
+            A_B_r   = compute_baseline_r(baseline, r, B, N, lambdas, rollouts)  # (M,)
+            tilde_a = d_B * (r - A_B_r)                                         # (M,)
 
             # ── 5 weight vectors for the probe projections ────────────────────
             # w1: g_hat weights  = H * D_B * (I-A_B) * r = H * tilde_a
@@ -553,7 +696,7 @@ def measure_checkpoint(
 
             # ── Scalar diagnostics ────────────────────────────────────────────
             # HL_F^2 = ||diag(H) L||_F^2, computed analytically (no M×M matrix)
-            HL_buf[flat_idx]     = compute_HL_sq(baseline, r, B, N, H, d_B, lambdas)
+            HL_buf[flat_idx]     = compute_HL_sq(baseline, r, B, N, H, d_B, lambdas, rollouts)
             ghat_norms[flat_idx] = p1.norm()
             gref_norms[flat_idx] = q.norm()
             rew_means[flat_idx]  = r.mean()

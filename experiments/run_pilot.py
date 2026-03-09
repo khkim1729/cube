@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from experiments.cube_sim import (
     ToyPolicy, DataPool,
     measure_checkpoint, aggregate_metrics,
-    compute_baseline_r, build_H, sample_rollouts, build_D_B,
+    compute_baseline_r, build_H, sample_rollouts, sample_rollouts_var, build_D_B,
     _compute_stv_lambda,
 )
 
@@ -53,7 +53,7 @@ CSV_COLUMNS = [
     "budget",         # none / prompt_skip / rollout_alloc / subset_select
     # ── 하이퍼파라미터 ──────────────────────────────────────────────────────
     "step",           # 학습 스텝 (0 ~ num_train_steps)
-    "checkpoint_idx", # 로깅 체크포인트 인덱스 (0 ~ T-1)
+    "checkpoint_idx", # 로깅 체크포인트 인덱스 (0 ~ T)
     "M",              # 총 롤아웃 수
     "B",              # 미니배치 프롬프트 수
     "N_per_prompt",   # 프롬프트당 롤아웃 수
@@ -123,16 +123,21 @@ def train_step(
     device: str,
 ):
     """One policy gradient update step using the specified baseline+budget stack."""
+    M_total = B * N
     prompts_b, golds_b = data_pool.sample_minibatch(B, rng)
-    rollouts = sample_rollouts(model, prompts_b, golds_b, N, rng, device)
+    # rollout_alloc: sample variable N_j per prompt (actual allocation)
+    if budget == "rollout_alloc":
+        rollouts = sample_rollouts_var(model, prompts_b, golds_b, N, M_total, rng, device)
+    else:
+        rollouts = sample_rollouts(model, prompts_b, golds_b, N, rng, device)
     r = rollouts.rewards  # (M,)
     M = rollouts.M
 
     # Build operators (matrix-free: no M×M A_B)
     d_B = build_D_B(rollouts, baseline, r)
     H, H0 = build_H(rollouts, budget, r)
-    lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt) if baseline == "stv" else None
-    A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas)
+    lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt, rollouts) if baseline == "stv" else None
+    A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas, rollouts)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
     # Compute log_probs for all rollouts (with grad)
@@ -219,11 +224,11 @@ def run_experiment(args):
 
     for step in range(args.num_train_steps + 1):
         # ── Log at checkpoint ──────────────────────────────────────────────
-        if step % log_interval == 0 and checkpoint_idx < args.T:
+        if step % log_interval == 0:
             ckpt_start = time.time()
             dt = datetime.now()
 
-            print(f"  [step={step:4d}] Measuring checkpoint {checkpoint_idx}/{args.T-1}...")
+            print(f"  [step={step:4d}] Measuring checkpoint {checkpoint_idx}/{args.T}...")
 
             # Freeze model, measure bias/variance (plans_cube_02.txt 프로토콜)
             model.eval()
