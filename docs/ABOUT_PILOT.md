@@ -246,6 +246,37 @@ probe projection 계산 직전에 `model.train()`을 호출하고 있었음. 이
 
 ---
 
+### 수정 9: RMS 편향 스칼라 추가
+
+**파일**: `experiments/cube_sim.py` — `aggregate_metrics` 함수
+
+**(A) 각 편향 성분에 대해 RMS 스칼라를 직접 계산해서 저장**
+
+- `budget_bias_rms   = mean_p2.pow(2).mean().sqrt()`
+- `baseline_bias_rms = mean_p3.pow(2).mean().sqrt()`
+- `fusion_bias_rms   = mean_p4.pow(2).mean().sqrt()`
+
+`mean_p2`, `mean_p3`, `mean_p4`는 각각 budget/baseline/fusion 편향 성분의 probe 차원별 기대값(\\(E[p^2], E[p^3], E[p^4]\\))
+`total_bias_norm`에서 사용한 것과 동일한 형태의 RMS(\\(\\sqrt{\\mathbb{E}[\\cdot^2]}\\))로 스케일을 맞추기 위해 `pow(2).mean().sqrt()`를 사용
+
+`run_pilot.py`, `run_vlm.py`의 `CSV_COLUMNS` 변경 사항: 
+이 값들은 `aggregate_metrics` 반환 딕셔너리의 `"budget_bias_rms"`, `"baseline_bias_rms"`, `"fusion_bias_rms"` 키로 저장
+
+---
+
+### 수정 10: compute_HL_sq STV row_sq 3번째 항 수정
+
+**파일**: `experiments/cube_sim.py` — `compute_HL_sq` 함수(STV baseline 분기)
+
+- \\[frac{\\lambda_j^2}{(B-1)^2} \\sum_{k\\neq j} \\frac{1}{N_k}] 형태로 계산하도록 변경:
+
+- `sum_inv_Nk = sum(1.0 / _nj(k) for k in range(B) if k != j)`
+- `val += (lam_j ** 2) * sum_inv_Nk / ((B - 1) ** 2)`
+
+가변 N_j 환경에서는 나머지 프롬프트들의 N_k 구조(\\(\\sum_{k\\neq j} 1/N_k\\))를 올바르게 반영해 STV의 HL proxy가 이론식과 일관되게 동작
+
+---
+
 ## 현재 상태
 
 | 컴포넌트 | 상태 |

@@ -163,6 +163,31 @@ cube/
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
 
 ---
+## 코드 수정 사항 (v6)
+
+### 1. RMS 편향 스칼라 추가 (`experiments/cube_sim.py`)
+
+**이전 (잘못된 방식):** budget_bias, baseline_bias, fusion_bias 성분은 abs().mean()과 std()만 저장하고 있었음. 따라서 요청한 형태의 스칼라에 대응하는 값이 별도로 없음.
+
+**수정 후:** 각 성분에 대해 RMS 스칼라를 직접 저장하도록 변경:
+
+$$budget_bias_rms   = mean_p2.pow(2).mean().sqrt()$$
+$$baseline_bias_rms = mean_p3.pow(2).mean().sqrt()$$
+$$fusion_bias_rms   = mean_p4.pow(2).mean().sqrt()$$
+
+budget/baseline/fusion 편향 성분도 total_bias_norm과 동일한 RMS 기준으로 비교 가능. probe 차원 전체에 대한 제곱평균제곱근 스케일을 직접 기록.
+
+### 2. compute_HL_sq STV row_sq 3번째 항 수정 (`experiments/cube_sim.py`)
+
+**이전 (잘못된 방식):** 가변 N_j 상황에서도 3번째 항이 사실상 균일 N 가정 형태로 계산되거나, \sum_{k \neq j} 1/N_k를 잘못 처리하고 있었음.
+$(\lambda_j^2 / \big((B-1)^2 \cdot \sum_{k\ne j} 1/N_k\big))$ → `(\sum_{k\ne j} 1/N_k)`로 나누는 형태
+
+**수정 후:** 이미지의 원래 식에 맞게, STV row norm의 3번째 항을 $​(\lambda_j^2 \cdot \sum_{k\ne j} 1/N_k / (B-1)^2)$ 형태로 계산하도록 수정: → `sum_inv_Nk = sum(1.0 / N_k for k != j)`
+
+$$val += (lam_j ** 2) * sum_inv_Nk / ((B - 1) ** 2)$$
+이 변경으로 rollout_alloc처럼 프롬프트별 rollout 수가 다른 경우에도 STV의 HL proxy가 이론식과 일치하게 계산됨. 즉, 3번째 항이 나머지 프롬프트들의 N_k 구조를 반영함.
+
+---
 
 ## 코드 수정 사항 (v5)
 
