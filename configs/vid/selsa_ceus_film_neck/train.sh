@@ -4,7 +4,7 @@ set -e
 mkdir -p configs/vid/selsa_ceus_film_neck_tmp
 
 EMBS=(8 16 32 64)
-EXPS=(fnh hcc c1)
+EXPS=(c2)
 
 for emb in "${EMBS[@]}"
 do
