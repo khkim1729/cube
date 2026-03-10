@@ -585,7 +585,8 @@ def compute_HL_sq(
             if B > 1:
                 sum_inv_Nk = sum(1.0 / _nj(k) for k in range(B) if k != j)
                 if sum_inv_Nk > 1e-12:
-                    val += lam_j ** 2 / ((B - 1) ** 2 * sum_inv_Nk)
+                    # val += lam_j ** 2 / ((B - 1) ** 2 * sum_inv_Nk)
+                    val += (lam_j ** 2) * sum_inv_Nk / ((B - 1) ** 2)
             row_sq[sl] = val
 
     return ((H * d_B) ** 2 * row_sq).sum().item()
@@ -771,12 +772,15 @@ def aggregate_metrics(cm: CheckpointMetrics) -> Dict[str, float]:
         "total_bias_norm":           total_bias_proj.pow(2).mean().sqrt().item(),
         "total_bias_proj_mean":      total_bias_proj.abs().mean().item(),
         "total_bias_proj_std":       total_bias_proj.std(unbiased=False).item(),
-        "budget_bias_proj_mean":     mean_p2.abs().mean().item(),
-        "budget_bias_proj_std":      mean_p2.std(unbiased=False).item(),
-        "baseline_bias_proj_mean":   mean_p3.abs().mean().item(),
-        "baseline_bias_proj_std":    mean_p3.std(unbiased=False).item(),
-        "fusion_bias_proj_mean":     mean_p4.abs().mean().item(),
-        "fusion_bias_proj_std":      mean_p4.std(unbiased=False).item(),
+        #"budget_bias_proj_mean":     mean_p2.abs().mean().item(),
+        #"budget_bias_proj_std":      mean_p2.std(unbiased=False).item(),
+        #"baseline_bias_proj_mean":   mean_p3.abs().mean().item(),
+        #"baseline_bias_proj_std":    mean_p3.std(unbiased=False).item(),
+        #"fusion_bias_proj_mean":     mean_p4.abs().mean().item(),
+        #"fusion_bias_proj_std":      mean_p4.std(unbiased=False).item(),
+        "budget_bias_rms":           mean_p2.pow(2).mean().sqrt().item(),
+        "baseline_bias_rms":         mean_p3.pow(2).mean().sqrt().item(),
+        "fusion_bias_rms":           mean_p4.pow(2).mean().sqrt().item(),
         # ── Variance ───────────────────────────────────────────────────────
         "total_var_mean":            s(total_var_per_probe),
         "total_var_std":             se(total_var_per_probe),

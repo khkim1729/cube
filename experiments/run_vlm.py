@@ -79,9 +79,12 @@ CSV_COLUMNS = [
     # Bias decomposition
     "total_bias_norm",
     "total_bias_proj_mean", "total_bias_proj_std",
-    "budget_bias_proj_mean", "budget_bias_proj_std",
-    "baseline_bias_proj_mean", "baseline_bias_proj_std",
-    "fusion_bias_proj_mean", "fusion_bias_proj_std",
+    #"budget_bias_proj_mean", "budget_bias_proj_std",
+    #"baseline_bias_proj_mean", "baseline_bias_proj_std",
+    #"fusion_bias_proj_mean", "fusion_bias_proj_std",
+    "budget_bias_rms",
+    "baseline_bias_rms",
+    "fusion_bias_rms",
     # Variance decomposition
     "total_var_mean", "total_var_std",
     "within_var_mean", "within_var_std",
@@ -395,7 +398,8 @@ def run_experiment(args):
 
             print(
                 f"    total_bias={metrics['total_bias_norm']:.4f} | "
-                f"fusion_bias={metrics['fusion_bias_proj_mean']:.4f} | "
+                # f"fusion_bias={metrics['fusion_bias_proj_mean']:.4f} | "
+                f"fusion_bias={metrics['fusion_bias_rms']:.4f} | "
                 f"HL={metrics['HL_proxy_mean']:.4f} | "
                 f"reward={metrics['reward_mean']:.3f} | "
                 f"vr={vr:.3f} | t={ckpt_elapsed:.1f}s"
