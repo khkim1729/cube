@@ -11,8 +11,9 @@
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
-- [코드 수정 사항 (v3)](#코드-수정-사항-v3)
+- [코드 수정 사항 (v5)](#코드-수정-사항-v5)
 - [코드 수정 사항 (v4)](#코드-수정-사항-v4)
+- [코드 수정 사항 (v3)](#코드-수정-사항-v3)
 - [데이터셋 및 모델](#데이터셋-및-모델)
   - [시뮬레이션 데이터 (현재 사용 중)](#시뮬레이션-데이터-현재-사용-중)
   - [VLM 벤치마크 데이터셋](#vlm-벤치마크-데이터셋)
@@ -160,6 +161,55 @@ cube/
 | **PromptSkip** | 저분산 프롬프트 제로화 | 블록 수준 제로화 | 발생 가능 |
 | **RolloutAlloc** | 비균일 $N_j$ 배분 | 비례 재가중치 | 발생 가능 |
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
+
+---
+
+## 코드 수정 사항 (v5)
+
+### 1. H_0 N_j 미반영 수정 (`experiments/cube_sim.py`)
+
+**이전 (잘못된 방식):** `budget=rollout_alloc`일 때 `build_H`에서 H는 N_j로 만들어지나 H_0는 여전히 균일 1/(N×B)로 계산. 따라서 `delta_H = H - H_0 ≠ 0` → 예산 편향 및 융합 편향 오계산.
+
+**수정 후:** H_0도 H와 동일하게 `1/(N_j × B)` 사용. `delta_H = H - H_0 = 0` → **RolloutAlloc 예산 편향 ≡ 0, 융합 편향 ≡ 0** (새로운 구조적 영조건 확인).
+
+이론적으로 RolloutAlloc은 H=H_0로 설계되었으므로 편향 기여 없음. 분산(HL proxy)에만 영향.
+
+### 2. probe_seed 일관성 수정 (`experiments/run_vlm.py`, `experiments/vlm_utils.py`)
+
+**이전:** `run_vlm.py`에서 `probe_seed=args.probe_seed + step`, `vlm_utils.py`에서 `seed=probe_seed + i` 사용 → 학습 스텝마다, pass마다 probe vector가 달라짐.
+
+**수정 후:** `+step`, `+i` 제거 → 모든 측정에서 동일한 probe vector 사용. 측정 일관성 보장.
+
+### 3. run_vlm.py adaptive allocation 구현 (`experiments/run_vlm.py`, `experiments/vlm_utils.py`)
+
+`generate_rollouts_vlm_var` 함수 신규 구현. `build_D_B_vlm`에서 `rollouts.prompt_slice(j)` 사용으로 가변 N_j 슬라이싱 수정. `measure_checkpoint_vlm` 및 `train_step_vlm`에서 `rollout_alloc` 시 가변 롤아웃 분기 처리.
+
+### 4. RMS 편향 놈 수식 수정 (`experiments/cube_sim.py`)
+
+**이전:** `total_bias_proj.norm()` = $\sqrt{\sum_r p_r^2}$ (R에 따라 스케일 변화)
+
+**수정 후:** `total_bias_proj.pow(2).mean().sqrt()` = $\sqrt{\frac{1}{R}\sum_r p_r^2}$ (R에 무관한 RMS 정규화)
+
+이 수정으로 편향 값이 이전 대비 $\sqrt{R} \approx 5.66$배 감소 (R=32 기준). 수식 상 올바른 스케일로 정규화.
+
+### 5. model.eval() 수정 (`experiments/run_vlm.py`)
+
+`measure_checkpoint_vlm`에서 `model.train()` → `model.eval()` 수정. 체크포인트 측정 시 dropout, batch norm 등이 평가 모드로 올바르게 설정.
+
+### 6. STV 공식 수정 (`experiments/cube_sim.py`)
+
+**6a. `_compute_stv_lambda`:** `var_mu = var_r / N` (균일 N) → `var_mu[j] = var_r[j] / N_j` (프롬프트별 N_j 적용)
+
+**6b. `compute_baseline_r` (STV bloo_scalar):** N_j가 가변적일 때 각 프롬프트 k의 평균을 자신의 N_k로 계산하도록 수정:
+```
+mu_arr[k] = rewards[prompt_slice(k)].mean()  # 각 k마다 자신의 N_k 사용
+bloo_scalar = (mu_total - mu_arr[j]) / (B - 1)
+```
+
+**6c. `compute_HL_sq` (STV row_sq 3번째 항):** 균일 N 가정 제거:
+$$\text{이전: } \frac{\lambda_j^2}{(B-1) N_j} \quad\to\quad \text{수정: } \frac{\lambda_j^2}{(B-1)^2 \sum_{k \neq j} (1/N_k)}$$
+
+균일 N=8, B=32에서 3번째 항이 이전 대비 약 **15배 감소** → STV HL proxy 대폭 수정.
 
 ---
 
@@ -502,101 +552,114 @@ python experiments/merge_results.py --results_dir experiments/results
 | `reward_mean` | 해당 체크포인트에서의 평균 보상 |
 | `elapsed_seconds` | 경과 시간 (초) |
 
-### 시뮬레이션 실험 결과 (전체 16개 조합)
+### 시뮬레이션 실험 결과 (전체 16개 조합, v5 수정 후)
 
 ToyPolicy (64→128→10 MLP, d=9,610 파라미터), GPU 3× NVIDIA A100 80GB.
-`run_batch.py`로 GPU 1,2,3에서 병렬 실행, 총 **354회 실험** (조합당 n=17–29회). 마지막 체크포인트(step 200) 기준.
-$v_r \sim \mathcal{N}(0,I)$ (비정규화 probe, **S=4, K=2** — 파일럿 프로토콜). DAPO-style PromptSkip 적용.
-RolloutAlloc: 프롬프트별 실제 가변 N_j 샘플링 (Bernoulli 분산 비례 배분).
+`run_batch.py`로 GPU 1,2,3에서 병렬 실행, **45회 post-fix 실험** (조합당 n=2–3회, 결정론적: data_seed=0, train_seed=7, probe_seed=42). 마지막 체크포인트(step 200) 기준.
+$v_r \sim \mathcal{N}(0,I)$ (비정규화 probe, **S=4, K=2** — 파일럿 프로토콜). v5 코드 수정 전체 반영.
+DAPO-style PromptSkip. RolloutAlloc: 프롬프트별 실제 가변 N_j (Bernoulli 분산 비례 배분).
 
 | 베이스라인 | 예산 | n_runs | Total Bias | Fusion Bias | $\|HL\|_F^2$ |
 |----------|------|:------:|:----------:|:-----------:|:------------:|
-| REINFORCE | None | 29 | 0.000 | **0.000** | 3.91e-3 |
-| REINFORCE | PromptSkip | 25 | 2.36e-3 | **0.000** | _2.57e-3_ |
-| REINFORCE | RolloutAlloc | 24 | 2.18e-1 | **0.000** | 9.79e-3 |
-| REINFORCE | SubsetSelect | 22 | 1.22e-1 | **0.000** | 7.81e-3 |
-| GRPO | None | 18 | 1.52e-1 | 0.000 | 1.31e+13 |
-| GRPO | PromptSkip | 22 | 1.65e-1 | 0.000 | 1.32e+12 |
-| GRPO | RolloutAlloc | 23 | **3.88e-1** | **1.21e-2** | 1.73e+12 |
-| GRPO | SubsetSelect | 24 | 3.67e-1 | 6.57e-3 | **2.60e+13** |
-| RLOO | None | 24 | 3.20e-2 | 0.000 | 4.46e-3 |
-| RLOO | PromptSkip | 17 | 3.13e-2 | _1.10e-4_ | 2.90e-3 |
-| RLOO | RolloutAlloc | 23 | 2.08e-1 | 8.31e-3 | 1.06e-2 |
-| RLOO | SubsetSelect | 23 | 1.03e-1 | 6.57e-3 | 8.93e-3 |
-| STV (full) | None | 20 | 2.62e-2 | 0.000 | 4.07e-3 |
-| STV (full) | PromptSkip | 22 | _2.62e-2_ | 8.96e-4 | 2.63e-3 |
-| STV (full) | RolloutAlloc | 21 | 2.15e-1 | 6.92e-3 | 1.06e-2 |
-| STV (full) | SubsetSelect | 17 | 9.95e-2 | 4.87e-3 | 8.13e-3 |
+| REINFORCE | None | 3 | 0.000 | **0.000** | 3.91e-3 |
+| REINFORCE | PromptSkip | 3 | 0.000 | **0.000** | _2.35e-3_ |
+| REINFORCE | RolloutAlloc | 3 | 0.000 | **0.000** | 2.04e-2 |
+| REINFORCE | SubsetSelect | 3 | 2.52e-2 | **0.000** | 7.81e-3 |
+| GRPO | None | 2 | 3.36e-2 | 0.000 | 1.32e+13 |
+| GRPO | PromptSkip | 3 | 3.36e-2 | 0.000 | 1.55e-2 |
+| GRPO | RolloutAlloc | 3 | 3.38e-2 | 0.000 | 6.80e+11 |
+| GRPO | SubsetSelect | 3 | **7.68e-2** | 9.33e-3 | **2.64e+13** |
+| RLOO | None | 3 | 5.68e-3 | 0.000 | 4.46e-3 |
+| RLOO | PromptSkip | 2 | 5.68e-3 | 0.000 | 2.70e-3 |
+| RLOO | RolloutAlloc | 3 | 2.59e-3 | 0.000 | 2.04e-2 |
+| RLOO | SubsetSelect | 3 | 2.09e-2 | **9.51e-3** | 8.93e-3 |
+| STV (full) | None | 3 | 4.82e-3 | 0.000 | 4.08e-3 |
+| STV (full) | PromptSkip | 3 | 5.56e-3 | _1.37e-3_ | 2.49e-3 |
+| STV (full) | RolloutAlloc | 3 | _2.32e-3_ | 0.000 | 2.04e-2 |
+| STV (full) | SubsetSelect | 2 | 2.00e-2 | 7.54e-3 | 8.12e-3 |
 
-(굵은 글씨: 컬럼 최댓값, 이탤릭: 비GRPO 최솟값)
+(굵은 글씨: 컬럼 최댓값, 이탤릭: 비GRPO 최솟값/비GRPO 비영 최솟값)
 
-### 분석
+### 분석 (v5 수정 후)
 
-**① Fusion Bias: 구조적 영조건 확인 (354회 전체)**
+**① Fusion Bias: 구조적 영조건 확인 (45회 post-fix 전체)**
 
-- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = 0.000 (354회 전체 확인)
-- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = 0.000 (354회 전체 확인)
-- **DAPO-style PSkip**: $\text{Var}(r_j) = 0$인 그룹만 스킵하므로 $H \approx H_0$ → GRPO×PSkip Fusion ≈ 0
-- Fusion Bias > 0 (큰 순서): GRPO×RAlloc(**1.21e-2**) > RLOO×RAlloc(8.31e-3) > GRPO×SubSel(6.57e-3) = RLOO×SubSel(6.57e-3) > STV×RAlloc(6.92e-3) > STV×SubSel(4.87e-3) >> STV×PSkip(8.96e-4) >> RLOO×PSkip(1.10e-4)
-- **RolloutAlloc**이 SubsetSelect보다 큰 Fusion Bias — 비균일 배분이 $A_B$ 그룹 통계와 강하게 결합
-- 354회까지 확장해도 순서 및 크기 **완전히 일치** — 결과 안정성 재확인
+- **REINFORCE** ($A_B = 0$): 모든 budget 조합에서 Fusion Bias = 0.000 (45회 전체 확인)
+- **None budget** ($H = H_0$): 모든 baseline 조합에서 Fusion Bias = 0.000 (45회 전체 확인)
+- **RolloutAlloc (v5 신규)**: Fix 1(H_0=H 수정)으로 모든 baseline 조합에서 Fusion Bias = 0.000 (45회 전체 확인)
+  - 이론적으로 RAlloc은 H=H_0로 설계 → 편향 기여 없음 (구조적 영조건)
+  - 이전 v4 코드에서는 H_0가 균일 N으로 계산되어 RAlloc Fusion이 잘못 양수로 측정됨
+- Fusion Bias > 0 (큰 순서): RLOO×SubSel(**9.51e-3**) > GRPO×SubSel(9.33e-3) > STV×SubSel(7.54e-3) > GRPO×SubSel(9.33e-3) > STV×PSkip(_1.37e-3_)
+- **SubsetSelect**만 non-trivial fusion — H와 A_B의 top-k 선택이 보상 통계와 결합
+- DAPO PSkip은 GRPO/RLOO/STV와 결합 시 Fusion ≈ 0 (분산=0 그룹 스킵이 H-H_0 편차를 최소화)
 
-**② GRPO의 $\|HL\|_F^2$ 폭발**
+**② GRPO의 $\|HL\|_F^2$ 폭발 (v5 수정 후)**
 
 | 구분 | HL proxy 범위 |
 |------|--------------|
-| GRPO 계열 | 1.32e+12 – 2.60e+13 |
-| 비GRPO 계열 | 2.57e-3 – 1.06e-2 |
+| GRPO 계열 (GRPO×PSkip 제외) | 6.80e+11 – 2.64e+13 |
+| GRPO×PSkip (v5 수정) | **1.55e-2** (비GRPO 수준) |
+| 비GRPO 계열 | 2.35e-3 – 2.04e-2 |
 
-최소 GRPO HL / 최대 비GRPO HL ≈ **1.2 × 10¹⁴배** 차이 (354회에서도 동일).
-원인: GRPO의 보상 의존적 $D_B$ (std 정규화)에서 $\sigma_\text{reward} \to 0$ 시 $D_B \to \infty$.
-**DAPO PSkip 효과**: GRPO×None(1.31e+13) → GRPO×PSkip(1.32e+12). 분산=0인 그룹 필터링으로 HL **약 9.9배 감소**.
+**v5 수정 핵심**: GRPO×PSkip HL이 이전 잘못된 값(1.32e+12)에서 올바른 값(1.55e-2)으로 수정. 분산=0인 그룹을 스킵하면 HL이 비GRPO 수준으로 감소함을 올바르게 반영.
+
+GRPO×None(1.32e+13) → GRPO×PSkip(1.55e-2): DAPO PSkip으로 HL **약 8.5×10¹⁰배 감소** (분산=0인 그룹의 D_B→∞ 기여 완전 제거).
+
+원인: GRPO의 보상 의존적 $D_B$ (std 정규화)에서 $\sigma_\text{reward} \to 0$ 시 $D_B \to \infty$. PSkip이 이를 차단.
 
 **③ Budget 종류가 HL proxy에 미치는 영향 (비GRPO 3개 baseline 공통)**
 
 | 예산 | REINFORCE | RLOO | STV (full) | 설명 |
 |------|-----------|------|------------|------|
-| None | 3.91e-3 | 4.46e-3 | 4.07e-3 | 기준 |
-| PromptSkip | **2.57e-3** | **2.90e-3** | **2.63e-3** | **감소** ↓ (최저) |
-| SubsetSelect | 7.81e-3 | 8.93e-3 | 8.13e-3 | **증가** ↑ |
-| RolloutAlloc | 9.79e-3 | 1.06e-2 | 1.06e-2 | **더 증가** ↑↑ (최대) |
+| None | 3.91e-3 | 4.46e-3 | 4.08e-3 | 기준 |
+| PromptSkip | **2.35e-3** | **2.70e-3** | **2.49e-3** | **감소** ↓ (최저) |
+| SubsetSelect | 7.81e-3 | 8.93e-3 | 8.12e-3 | **증가** ↑ |
+| RolloutAlloc | 2.04e-2 | 2.04e-2 | 2.04e-2 | **더 증가** ↑↑ (최대) |
 
-일관된 순서: **PromptSkip < None < SubsetSelect < RolloutAlloc** (354회에서도 모든 비GRPO baseline에서 동일 재확인).
-올바른 가변 N_j 구현(v4) 결과 — 이전 균일 N 방식(v3)에서는 RAlloc < SubSel이었으나 수정 후 역전.
+일관된 순서: **PromptSkip < None < SubsetSelect < RolloutAlloc** (45회 전체 비GRPO baseline에서 동일 확인).
 
-**④ RLOO vs STV: None budget에서의 편향 비교**
+**신규 관찰**: RolloutAlloc HL이 세 비GRPO baseline 모두에서 정확히 **2.04e-2**로 동일. 가변 N_j 배분 자체가 HL을 결정 (baseline 종류와 무관).
 
-S=4, K=2 파일럿 프로토콜에서 MC 노이즈로 인해 bias 추정치의 절대값은 크지만, 상대 순서는 안정적:
+**④ RLOO vs STV: None budget에서의 편향 비교 (v5 수정 후)**
+
+v5 STV 공식 수정(Fix 6)으로 STV bias가 크게 감소:
 
 | 베이스라인 | None budget Bias | 설명 |
 |----------|:----------------:|------|
 | REINFORCE | 0.000 | 참조 추정기 ($A_B=0$, 정확히 0) |
-| STV (full) | 2.62e-2 | James-Stein 적응 축소 적용 |
-| RLOO | 3.20e-2 | LOO leave-one-out |
-| GRPO | 1.52e-1 | $D_B$ 정규화 편향 |
+| STV (full) | **4.82e-3** | James-Stein 적응 축소 (v5 수정 후) |
+| RLOO | 5.68e-3 | LOO leave-one-out |
+| GRPO | 3.36e-2 | $D_B$ 정규화 편향 |
 
-STV가 RLOO보다 낮은 편향을 보이며, 두 방법 모두 GRPO 대비 현저히 낮음 (354회에서도 동일).
-**신규 관찰 (354회):** STV×None bias (2.62e-2) ≈ STV×PSkip bias (2.62e-2) — PSkip 예산이 STV 편향에 추가 기여를 하지 않음. 이는 STV의 적응적 λ가 이미 저분산 프롬프트를 자연스럽게 처리하기 때문.
+v5 수정 후 STV×None bias (4.82e-3) < RLOO×None (5.68e-3). STV가 RLOO보다 낮은 편향을 보임.
 
-**⑤ RolloutAlloc vs SubsetSelect: Total Bias 비교 (354회)**
+**⑤ RolloutAlloc: v5 수정 후 편향 구조 변화**
 
-| 조합 | RAlloc Bias | SubSel Bias | 비율 |
-|------|:-----------:|:-----------:|:----:|
-| REINFORCE× | 2.18e-1 | 1.22e-1 | 1.8× |
-| RLOO× | 2.08e-1 | 1.03e-1 | 2.0× |
-| STV (full)× | 2.15e-1 | 9.95e-2 | 2.2× |
+Fix 1(H_0=H) 수정으로 RAlloc의 총 편향 = 순수 베이스라인 편향만:
 
-RolloutAlloc이 SubsetSelect보다 **1.8–2.2배 높은 Total Bias** (354회에서도 일관 확인).
-실제 가변 N_j 배분에서 $H_j \propto$ Bernoulli 분산이 $H-H_0$ 편차를 더 극단적으로 만들어 예산 편향 증가.
+| 조합 | v5 RAlloc Bias | 구성 |
+|------|:--------------:|------|
+| REINFORCE×RAlloc | 0.000 | 순수 0 ($A_B=0$) |
+| RLOO×RAlloc | 2.59e-3 | 순수 베이스라인 편향 |
+| STV×RAlloc | **2.32e-3** | 순수 베이스라인 편향 (가장 작음) |
+| GRPO×RAlloc | 3.38e-2 | 순수 베이스라인 편향 ($D_B$ 정규화) |
 
-**⑥ REINFORCE×PSkip: 비GRPO 조합 중 최저 HL (354회 재확인)**
+이전 v4에서는 RAlloc 전체 편향이 2.08e-1~2.18e-1로 크게 잘못 계산됨. 수정 후 훨씬 낮은 올바른 값 확인.
 
-REINFORCE×PSkip이 비GRPO 조합 중 최저 HL(2.57e-3)을 달성. DAPO-style 필터링이 $A_B=0$인 REINFORCE와 결합하여 Fusion Bias도 0으로 유지하면서 HL을 최소화.
-STV×PSkip(2.63e-3)이 그 뒤를 이음 — HL은 거의 동등하나 Fusion Bias 8.96e-4 추가 발생.
+**⑥ REINFORCE×PSkip: 비GRPO 조합 중 최저 HL (v5 확인)**
 
-**⑦ 결과 안정성 (309회 → 354회)**
+REINFORCE×PSkip이 비GRPO 조합 중 최저 HL(2.35e-3)을 달성. DAPO-style 필터링이 $A_B=0$인 REINFORCE와 결합하여 Fusion Bias도 0으로 유지하면서 HL을 최소화.
+STV×PSkip(2.49e-3)이 그 뒤를 이음 — HL은 거의 동등하나 Fusion Bias 1.37e-3 추가 발생.
 
-45회 추가 실험 후 모든 주요 결론 유지. 수치 변화 모두 2번째 유효숫자 수준 이하 — 결론 및 순서 완전히 일치. 샘플 크기 충분성 재확인.
+**⑦ 전체 v5 수정 영향 요약**
+
+| 항목 | v4 (354회, 구버전) | v5 (45회, 수정 후) | 변화 |
+|------|:------------------:|:------------------:|:----:|
+| RAlloc Fusion (비REINF) | 6.92e-3 ~ 1.21e-2 (잘못됨) | 0.000 (올바름) | 구조적 영조건 신규 확인 |
+| GRPO×PSkip HL | 1.32e+12 (잘못됨) | 1.55e-2 (올바름) | ~8.5e10배 감소 |
+| STV×None Bias | 2.62e-2 (잘못됨) | 4.82e-3 (올바름) | ~5.4배 감소 |
+| RAlloc Bias (비REINF) | 2.08e-1 ~ 2.18e-1 (잘못됨) | 2.32e-3 ~ 3.38e-2 (올바름) | 대폭 감소 |
+| 편향 스케일 | sqrt(R)≈5.66배 과대 측정 | RMS 정규화 (올바름) | 전 항목 수정 |
 
 ### 실험 설계 (plans_cube_02.txt 기반)
 

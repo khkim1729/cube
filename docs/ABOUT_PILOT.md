@@ -9,6 +9,10 @@
   - [수정 2: cube/ 패키지 메트릭 API를 파일럿에 맞게 수정](#수정-2-cube-패키지-메트릭-api를-파일럿에-맞게-수정)
   - [수정 3: probe_seed 오프셋 제거](#수정-3-probe_seed-오프셋-제거)
   - [수정 4: rollout_alloc 실제 가변 롤아웃 샘플링, rng 버그, 로깅 스텝 수정](#수정-4-rollout_alloc-실제-가변-롤아웃-샘플링-rng-버그-로깅-스텝-수정)
+  - [수정 5: H_0에 N_j 미반영 수정 (rollout_alloc)](#수정-5-h_0에-n_j-미반영-수정-rollout_alloc)
+  - [수정 6: RMS 편향 놈 수식 수정](#수정-6-rms-편향-놈-수식-수정)
+  - [수정 7: STV 공식 3종 수정](#수정-7-stv-공식-3종-수정)
+  - [수정 8: run_vlm.py 수정 (probe_seed, model.eval, 가변 롤아웃)](#수정-8-run_vlmpy-수정-probe_seed-modeleval-가변-롤아웃)
 - [현재 상태](#현재-상태)
 
 ---
@@ -119,13 +123,137 @@
 
 ---
 
+### 수정 5: H_0에 N_j 미반영 수정 (rollout_alloc)
+
+**파일**: `experiments/cube_sim.py` — `build_H` 함수
+
+**문제**: `budget == "rollout_alloc"`이고 `rollouts.N_list is not None`일 때 (실제 가변 롤아웃 샘플링 경우), H는 각 프롬프트 j에 대해 `1/(N_j * B)`로 올바르게 계산되고 있었지만, H_0은 여전히 균일한 `1/(B * N)`으로 계산되고 있었음. 이로 인해 `delta_H = H - H0 ≠ 0`이 되어, 원래 0이어야 할 budget bias 및 fusion bias가 0이 아닌 값으로 잘못 계산되었음.
+
+**수정 후**: `rollouts.N_list is not None`인 경우 H_0도 H와 동일하게 `H0_out[sl] = 1/(N_j * B)`로 설정. 결과적으로 `delta_H = H - H0 = 0`이 되어, rollout_alloc은 편향에 영향을 주지 않고 분산(`HL_F^2`)에만 영향을 줌. 이는 논문의 이론적 예측과 일치.
+
+```python
+# 수정 전 (잘못된 방식): H만 N_j 반영, H0는 균일 N
+H[sl] = 1.0 / (N_j * B)
+# H0 = 1/(B*N) 그대로 → delta_H ≠ 0
+
+# 수정 후 (올바른 방식): H, H0 모두 N_j 반영 → delta_H = 0
+H[sl]     = 1.0 / (N_j * B)
+H0_out[sl] = 1.0 / (N_j * B)
+```
+
+---
+
+### 수정 6: RMS 편향 놈 수식 수정
+
+**파일**: `experiments/cube_sim.py` — `aggregate_metrics` 함수
+
+**문제**: `total_bias_norm`이 `total_bias_proj.norm()`으로 계산되고 있었음. 이는 `√(Σ_r p_r^2)`로, R에 따라 스케일이 달라지는 수식. 논문에서 정의한 올바른 척도는 `√((1/R) Σ_r p_r^2)` (RMS, R-불변 척도)임.
+
+**수정 후**: `total_bias_proj.pow(2).mean().sqrt()`로 변경.
+
+```python
+# 수정 전: √(Σ p_r^2) — R에 따라 스케일 변화
+"total_bias_norm": total_bias_proj.norm().item()
+
+# 수정 후: √((1/R) Σ p_r^2) — R-불변 RMS
+"total_bias_norm": total_bias_proj.pow(2).mean().sqrt().item()
+```
+
+---
+
+### 수정 7: STV 공식 3종 수정
+
+**파일**: `experiments/cube_sim.py`
+
+**(A) `_compute_stv_lambda` — var_mu 계산 오류**
+
+`var_mu = var_r / N`으로 모든 프롬프트에 동일한 N을 사용하고 있었음. 가변 N_j 환경에서는 프롬프트별로 `var_mu[j] = var_r[j] / N_j`로 계산해야 함.
+
+```python
+# 수정 전:
+var_mu = var_r / N  # 모든 프롬프트에 동일한 N 사용
+
+# 수정 후:
+var_mu = torch.zeros(B, device=device)
+for j in range(B):
+    N_j = rollouts.prompt_N(j) if ... else N
+    var_mu[j] = var_r[j] / N_j
+```
+
+**(B) `compute_baseline_r` — STV bloo_scalar 오류**
+
+기존 `bloo_scalar = (total_sum - r_j.sum()) / ((B-1) * N_j)`는 타깃 프롬프트 j의 N_j로 다른 프롬프트의 합을 나누는 방식으로 잘못됨. 올바른 수식은 각 프롬프트 k의 평균(자신의 N_k로 나눈 것)을 합산하는 것:
+
+`μ̄_{-j} = (1/(B-1)) * Σ_{k≠j} (1/N_k) * Σ_l r_{k,l} = (1/(B-1)) * Σ_{k≠j} mean(r_k)`
+
+```python
+# 수정 전:
+total_sum = rewards.sum()
+bloo_scalar = (total_sum - r_j.sum()) / ((B - 1) * N_j)
+
+# 수정 후: 각 프롬프트의 평균을 먼저 계산 후 합산
+mu_arr[k] = rewards[_sl(k)].mean()  # 각 k의 N_k 사용
+bloo_scalar = (mu_total - mu_arr[j]) / (B - 1)
+```
+
+**(C) `compute_HL_sq` — STV row_sq 세 번째 항 오류**
+
+기존 `lam_j^2 / ((B-1) * N_j)`는 수식 유도 오류. 올바른 분모는 `(B-1)^2 * Σ_{k≠j}(1/N_k)`:
+
+`‖row_t‖^2 = 1 + (1-λ_j)^2/(N_j-1) + λ_j^2/((B-1)^2 * Σ_{k≠j}(1/N_k))`
+
+```python
+# 수정 전:
+val += lam_j ** 2 / ((B - 1) * N_j)
+
+# 수정 후:
+sum_inv_Nk = sum(1.0 / _nj(k) for k in range(B) if k != j)
+val += lam_j ** 2 / ((B - 1) ** 2 * sum_inv_Nk)
+```
+
+균일 N=8, B=32 환경에서 세 번째 항은 기존 `lam^2/248`에서 수정 후 `lam^2/3724`로 약 15배 작아짐 → STV HL_F^2 값이 크게 감소할 것으로 예상.
+
+---
+
+### 수정 8: run_vlm.py 수정 (probe_seed, model.eval, 가변 롤아웃)
+
+**파일**: `experiments/run_vlm.py`, `experiments/vlm_utils.py`
+
+**(A) probe_seed 오프셋 제거**
+
+`run_experiment` 함수에서 `probe_seed=args.probe_seed + step`으로 스텝마다 다른 시드를 사용하고 있었음. 이로 인해 학습 중 probe vector가 달라져, 서로 다른 체크포인트 간의 측정값이 비교 불가능해짐. `+ step` 제거.
+
+`compute_vlm_weight_projs` 내부에서도 `seed=probe_seed + i`로 각 weight vector마다 다른 시드를 사용했음. 이 역시 체크포인트 내 5개 projection이 서로 다른 probe 공간에서 계산되는 문제. `+ i` 제거.
+
+**(B) measure_checkpoint_vlm에서 model.eval() 수정**
+
+probe projection 계산 직전에 `model.train()`을 호출하고 있었음. 이는 잘못된 방식으로, `run_pilot.py`와 마찬가지로 `model.eval()`이 올바름 (측정 시에는 dropout 비활성화 등).
+
+**(C) run_vlm.py 가변 롤아웃 지원**
+
+`budget == "rollout_alloc"`일 때 `measure_checkpoint_vlm`, `train_step_vlm` 모두에서 균일한 N개 롤아웃을 생성하고 있었음. `run_pilot.py`와 동일하게 `generate_rollouts_vlm_var` 함수를 신규 구현하고 이를 호출하도록 수정.
+
+`vlm_utils.py` 변경 사항:
+- `Rollouts` dataclass에 `N_list`, `prompt_slice(j)`, `prompt_N(j)` 추가 (cube_sim.py와 동일 인터페이스)
+- `generate_rollouts_vlm_var()` 함수 신규 구현 (probe → 분산 추정 → N_j 할당 → 실제 샘플링)
+- `compute_log_probs_batch()`: `N_list` 파라미터 추가 → 가변 N_j 지원
+- `build_D_B_vlm()`: `j*N:(j+1)*N` → `rollouts.prompt_slice(j)` 사용
+
+`run_vlm.py` 변경 사항:
+- `_compute_stv_lambda`, `compute_baseline_r`, `compute_HL_sq` 호출 시 `rollouts` 파라미터 전달
+- `train_step_vlm` 내 로그 확률 계산 시 슬라이싱을 `rollouts.prompt_slice(j)` 기반으로 수정
+- 마지막 스텝 로깅 누락 수정 (`and checkpoint_idx < args.T` 조건 제거)
+
+---
+
 ## 현재 상태
 
 | 컴포넌트 | 상태 |
 |----------|------|
-| `experiments/cube_sim.py` | 완료, 논문 기준 정확 (가변 롤아웃, rng 수정 포함) |
-| `experiments/run_pilot.py` | 완료, 264+ 회 검증 (마지막 스텝 로깅 수정 포함) |
-| `experiments/run_vlm.py` | 완료, `run_pilot.py`를 Qwen2-VL-7B + LoRA로 미러링 |
+| `experiments/cube_sim.py` | 완료, 논문 기준 정확 (H_0 N_j 반영, RMS 놈, STV 3종 수정 포함) |
+| `experiments/run_pilot.py` | 완료, 354회 검증 |
+| `experiments/run_vlm.py` | 완료, `run_pilot.py`를 Qwen2-VL-7B + LoRA로 미러링 (가변 롤아웃 지원) |
+| `experiments/vlm_utils.py` | 완료: `generate_rollouts_vlm_var`, 가변 N_j 지원 |
 | `cube/utils/probe.py` | 완료: `project_flat_grad` (on-the-fly, O(d) 메모리) |
 | `experiments/run_experiment.py` | 메트릭 API 업데이트 완료; VLM 학습 루프는 `run_vlm.py` |
 | `cube/metrics/bias.py` | 완료: matrix-free 방식, `(S,K,R)` probe projection |

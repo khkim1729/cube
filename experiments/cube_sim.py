@@ -339,7 +339,10 @@ def _compute_stv_lambda(
         r_j = rewards[sl]
         mu[j] = r_j.mean()
         var_r[j] = r_j.var(unbiased=True) if N_j > 1 else torch.zeros(1, device=device).squeeze()
-    var_mu = var_r / N   # use base N as reference (conservative)
+    var_mu = torch.zeros(B, device=device)
+    for j in range(B):
+        N_j = rollouts.prompt_N(j) if rollouts is not None and rollouts.N_list is not None else N
+        var_mu[j] = var_r[j] / N_j
     for j in range(B):
         mu_others = torch.cat([mu[:j], mu[j + 1:]])
         var_mu_others = torch.cat([var_mu[:j], var_mu[j + 1:]])
@@ -397,7 +400,12 @@ def compute_baseline_r(
     elif baseline == "stv":
         if lambdas is None:
             lambdas = _compute_stv_lambda(rewards, B, N, rollouts)
-        total_sum = rewards.sum()
+        # Pre-compute per-prompt means using each prompt's own N_k.
+        # bloo_scalar = (1/(B-1)) * Σ_{k≠j} mean(r_k), where each mean uses its own N_k.
+        mu_arr = torch.zeros(B, device=device)
+        for k in range(B):
+            mu_arr[k] = rewards[_sl(k)].mean()
+        mu_total = mu_arr.sum()
         for j in range(B):
             sl = _sl(j)
             N_j = _nj(j)
@@ -405,7 +413,7 @@ def compute_baseline_r(
             lam_j = lambdas[j].item()
             rloo_j = (r_j.sum() - r_j) / (N_j - 1) if N_j > 1 \
                      else torch.zeros(N_j, device=device)
-            bloo_scalar = (total_sum - r_j.sum()) / ((B - 1) * N_j) if B > 1 else 0.0
+            bloo_scalar = (mu_total - mu_arr[j]) / (B - 1) if B > 1 else 0.0
             A_B_r[sl] = (1 - lam_j) * rloo_j + lam_j * bloo_scalar
 
     return A_B_r
@@ -471,12 +479,16 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
 
     elif budget == "rollout_alloc":
         H = torch.zeros(M, device=device)
+        H0_out = H0.clone()
         if rollouts.N_list is not None:
-            # Variable rollout allocation: actual N_j were sampled; H = 1/(N_j * B)
+            # Variable rollout allocation: actual N_j were sampled.
+            # H = H0 = 1/(N_j * B) per prompt → delta_H = 0 (no budget/fusion bias).
+            # RolloutAlloc affects only variance (HL_F^2), not bias.
             for j in range(B):
                 sl = rollouts.prompt_slice(j)
                 N_j = rollouts.prompt_N(j)
                 H[sl] = 1.0 / (N_j * B)
+                H0_out[sl] = 1.0 / (N_j * B)
         else:
             # Uniform N: weight proportionally to per-prompt reward mean
             means = torch.tensor([
@@ -488,7 +500,7 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
                 s, e = j * N, (j + 1) * N
                 H[s:e] = (1.0 / N) * means[j] / B
 
-        return H, H0
+        return H, H0_out
 
     elif budget == "subset_select":
         # Keep top-k rollouts per prompt by reward
@@ -566,12 +578,14 @@ def compute_HL_sq(
             sl = _sl(j)
             N_j = _nj(j)
             lam_j = lambdas[j].item()
-            # ||row_t||^2 = 1 + (1-λ_j)^2/(N_j-1) + λ_j^2/((B-1)*N_j)
+            # ||row_t||^2 = 1 + (1-λ_j)^2/(N_j-1) + λ_j^2/((B-1)^2 * Σ_{k≠j}(1/N_k))
             val = 1.0
             if N_j > 1:
                 val += (1 - lam_j) ** 2 / (N_j - 1)
             if B > 1:
-                val += lam_j ** 2 / ((B - 1) * N_j)
+                sum_inv_Nk = sum(1.0 / _nj(k) for k in range(B) if k != j)
+                if sum_inv_Nk > 1e-12:
+                    val += lam_j ** 2 / ((B - 1) ** 2 * sum_inv_Nk)
             row_sq[sl] = val
 
     return ((H * d_B) ** 2 * row_sq).sum().item()
@@ -754,7 +768,7 @@ def aggregate_metrics(cm: CheckpointMetrics) -> Dict[str, float]:
 
     return {
         # ── Bias ───────────────────────────────────────────────────────────
-        "total_bias_norm":           total_bias_proj.norm().item(),
+        "total_bias_norm":           total_bias_proj.pow(2).mean().sqrt().item(),
         "total_bias_proj_mean":      total_bias_proj.abs().mean().item(),
         "total_bias_proj_std":       total_bias_proj.std(unbiased=False).item(),
         "budget_bias_proj_mean":     mean_p2.abs().mean().item(),

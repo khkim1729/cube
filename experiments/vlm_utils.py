@@ -8,6 +8,7 @@ Provides:
   - extract_answer(text, qtype) → str
   - compute_reward(response, gold, qtype) → float
   - generate_rollouts_vlm(model, processor, items, N, ...) → Rollouts
+  - generate_rollouts_vlm_var(model, processor, items, N, M, ...) → Rollouts (variable N_j)
   - compute_log_probs_batch(model, processor, items, responses, device) → (M,) Tensor
   - probe_project_grads(param_grads, R, seed, device) → (R,) Tensor
 
@@ -34,12 +35,25 @@ import torch.nn as nn
 class Rollouts:
     """Container for a single (X, Y) VLM minibatch."""
     items: list               # B items (question/image/gold dicts)
-    responses: list           # M = B*N response strings
+    responses: list           # M response strings (flat, ordered by prompt)
     rewards: torch.Tensor     # (M,) float
     prompt_ids: torch.Tensor  # (M,) which prompt [0..B)
     N_per_prompt: int
     B: int
     M: int
+    N_list: Optional[List[int]] = None  # per-prompt counts; None = uniform N_per_prompt
+
+    def prompt_slice(self, j: int) -> slice:
+        """Return flat-array slice for prompt j."""
+        if self.N_list is None:
+            N = self.N_per_prompt
+            return slice(j * N, (j + 1) * N)
+        offset = sum(self.N_list[:j])
+        return slice(offset, offset + self.N_list[j])
+
+    def prompt_N(self, j: int) -> int:
+        """Return rollout count for prompt j."""
+        return self.N_per_prompt if self.N_list is None else self.N_list[j]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,6 +381,110 @@ def generate_rollouts_vlm(
     )
 
 
+def generate_rollouts_vlm_var(
+    model,
+    processor,
+    items: list,          # B items
+    N: int,               # base rollout count (uniform reference)
+    M: int,               # total rollout budget (sum of all N_j)
+    max_new_tokens: int = 256,
+    temperature: float = 1.0,
+    device: str = "cuda",
+    n_probe: int = 4,     # probe rollouts per prompt for allocation
+) -> Rollouts:
+    """Generate variable N_j rollouts per prompt, allocated by reward variance.
+
+    Implements Adaptive Rollout Allocation for VLMs:
+      1. Sample n_probe rollouts per prompt to estimate per-prompt accuracy.
+      2. Compute weight_j = acc_j * (1 - acc_j) * 4  (Bernoulli variance proxy,
+         maximized when acc_j = 0.5, i.e., prompt is near the learning boundary).
+      3. Allocate N_j ∝ weight_j with sum(N_j) = M, at least 1 per prompt.
+      4. Sample the actual N_j rollouts per prompt.
+    """
+    B = len(items)
+
+    def _generate_n(item, n_rollouts):
+        """Generate n_rollouts for a single item, return (responses, rewards)."""
+        messages = build_qwen_prompt(item)
+        text_prompt = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        if item.get("image") is not None:
+            inputs = processor(
+                text=[text_prompt], images=[item["image"]], return_tensors="pt",
+            ).to(device)
+        else:
+            inputs = processor(text=[text_prompt], return_tensors="pt").to(device)
+        resps, rews = [], []
+        for _ in range(n_rollouts):
+            output = model.generate(
+                **inputs,
+                do_sample=(temperature > 0),
+                temperature=temperature if temperature > 0 else 1.0,
+                max_new_tokens=max_new_tokens,
+                pad_token_id=processor.tokenizer.eos_token_id,
+            )
+            gen_ids = output[0, inputs["input_ids"].shape[1]:]
+            resp = processor.tokenizer.decode(gen_ids, skip_special_tokens=True)
+            resps.append(resp)
+            rews.append(compute_reward(resp, item["gold"], item["type"]))
+        return resps, rews
+
+    # Step 1: probe rollouts to estimate per-prompt accuracy
+    model.eval()
+    probe_accs = []
+    with torch.no_grad():
+        for item in items:
+            _, rews = _generate_n(item, n_probe)
+            probe_accs.append(sum(rews) / len(rews))
+
+    # Step 2: compute allocation weights (Bernoulli variance proxy)
+    weights = [acc * (1.0 - acc) * 4.0 for acc in probe_accs]
+    total_w = sum(weights)
+    if total_w < 1e-8:
+        weights = [1.0] * B
+        total_w = float(B)
+    weights = [w / total_w for w in weights]
+
+    # Step 3: compute N_j with sum(N_j) == M, min 1 per prompt
+    remaining = M - B
+    extra = [int(round(w * remaining)) for w in weights]
+    diff = remaining - sum(extra)
+    if diff != 0:
+        sorted_idx = sorted(range(B), key=lambda j: weights[j], reverse=True)
+        for i in range(abs(diff)):
+            j = sorted_idx[i % B]
+            extra[j] = max(0, extra[j] + (1 if diff > 0 else -1))
+    N_list = [1 + e for e in extra]  # guaranteed: sum == M, each >= 1
+
+    # Step 4: sample actual N_j rollouts per prompt
+    all_responses = []
+    rewards_list = []
+    model.eval()
+    with torch.no_grad():
+        for j, item in enumerate(items):
+            resps, rews = _generate_n(item, N_list[j])
+            all_responses.extend(resps)
+            rewards_list.extend(rews)
+
+    rewards = torch.tensor(rewards_list, dtype=torch.float32, device=device)
+    prompt_ids_list = []
+    for j in range(B):
+        prompt_ids_list.extend([j] * N_list[j])
+    prompt_ids = torch.tensor(prompt_ids_list, dtype=torch.long, device=device)
+
+    return Rollouts(
+        items=items,
+        responses=all_responses,
+        rewards=rewards,
+        prompt_ids=prompt_ids,
+        N_per_prompt=N,
+        B=B,
+        M=sum(N_list),
+        N_list=N_list,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. Log-Probability Computation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,19 +493,23 @@ def compute_log_probs_batch(
     model,
     processor,
     items: list,          # B items (question+image)
-    responses: list,      # M = B*N response strings (flat)
-    N: int,
+    responses: list,      # M response strings (flat, ordered by prompt)
+    N: int,               # uniform rollouts per prompt (ignored when N_list given)
     device: str = "cuda",
+    N_list: Optional[List[int]] = None,  # per-prompt counts for variable N_j
 ) -> torch.Tensor:
     """Compute log π(y_m | x_m) for all M rollouts, with grad.
 
     Returns (M,) tensor of scalar log-probs (each with grad for backward).
+    Supports variable N_j per prompt via N_list parameter.
     """
     B = len(items)
-    M = B * N
     log_pi_list = []
 
     for j, item in enumerate(items):
+        N_j = N_list[j] if N_list is not None else N
+        offset = sum(N_list[:j]) if N_list is not None else j * N
+
         messages = build_qwen_prompt(item)
         text_prompt = processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -401,8 +523,8 @@ def compute_log_probs_batch(
         prompt_ids = proc_out.input_ids  # (1, L_prompt)
         L_p = prompt_ids.shape[1]
 
-        for i in range(N):
-            resp = responses[j * N + i]
+        for i in range(N_j):
+            resp = responses[offset + i]
             resp_ids = processor.tokenizer(
                 resp, return_tensors="pt", add_special_tokens=False
             ).input_ids.to(device)  # (1, L_resp)
@@ -526,8 +648,9 @@ def compute_vlm_weight_projs(
         model, processor,
         rollouts.items,
         rollouts.responses,
-        N=N,
+        N=rollouts.N_per_prompt,
         device=device,
+        N_list=rollouts.N_list,
     )  # (M,) tensor with grad
 
     results = []
@@ -541,7 +664,7 @@ def compute_vlm_weight_projs(
             create_graph=False,
             allow_unused=True,
         )
-        proj = probe_project_grads(grads, R, seed=probe_seed + i, device=device)
+        proj = probe_project_grads(grads, R, seed=probe_seed, device=device)
         results.append(proj)
 
     return results

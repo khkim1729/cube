@@ -1,0 +1,20 @@
+{
+  "run_id": "20260310_174738_reinforce_subset_select_gpu2",
+  "baseline": "reinforce",
+  "budget": "subset_select",
+  "gpu_id": 0,
+  "d": 9610,
+  "M": 256,
+  "B": 32,
+  "N": 8,
+  "S": 4,
+  "K": 2,
+  "T": 10,
+  "R": 32,
+  "probe_seed": 42,
+  "num_train_steps": 200,
+  "lr": 0.001,
+  "start_time": "2026-03-10T17:47:41.315284",
+  "end_time": "2026-03-10T17:47:44.498175",
+  "total_elapsed_seconds": 3.18
+}

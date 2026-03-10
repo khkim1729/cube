@@ -37,6 +37,7 @@ from experiments.vlm_utils import (
     load_qwen_model,
     load_vlm_dataset,
     generate_rollouts_vlm,
+    generate_rollouts_vlm_var,
     compute_vlm_weight_projs,
 )
 from experiments.cube_sim import (
@@ -54,13 +55,13 @@ from experiments.cube_sim import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_D_B_vlm(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    M, B, N = rollouts.M, rollouts.B, rollouts.N_per_prompt
+    M, B = rollouts.M, rollouts.B
     d = torch.ones(M, device=rewards.device)
     if baseline == "grpo":
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            sigma = rewards[s:e].std(unbiased=False).clamp(min=eps)
-            d[s:e] = 1.0 / sigma
+            sl = rollouts.prompt_slice(j)
+            sigma = rewards[sl].std(unbiased=False).clamp(min=eps)
+            d[sl] = 1.0 / sigma
     return d
 
 
@@ -148,21 +149,26 @@ def measure_checkpoint_vlm(
         batch_items = random.sample(data_pool, min(B, len(data_pool)))
 
         for k in range(K):
-            # Generate N rollouts per item
-            rollouts = generate_rollouts_vlm(
-                model, processor, batch_items, N,
-                max_new_tokens=256, temperature=1.0, device=device,
-            )
+            # Generate rollouts: use variable N_j for rollout_alloc
+            if budget == "rollout_alloc":
+                rollouts = generate_rollouts_vlm_var(
+                    model, processor, batch_items, N, M=B * N,
+                    max_new_tokens=256, temperature=1.0, device=device,
+                )
+            else:
+                rollouts = generate_rollouts_vlm(
+                    model, processor, batch_items, N,
+                    max_new_tokens=256, temperature=1.0, device=device,
+                )
             r = rollouts.rewards  # (M,)
-            M = rollouts.M
 
             # Build operators (same formulas as cube_sim)
             d_B = build_D_B_vlm(rollouts, baseline, r)
             H, H0 = build_H(rollouts, budget, r)
             delta_H = H - H0
 
-            lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt) if baseline == "stv" else None
-            A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas)
+            lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt, rollouts) if baseline == "stv" else None
+            A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas, rollouts)
             tilde_a = d_B * (r - A_B_r)
 
             # Weight vectors for 5 probe projections
@@ -173,7 +179,7 @@ def measure_checkpoint_vlm(
             w5 = H0 * r             # g_ref
 
             # 5 probe projections via weighted backward passes
-            model.train()  # enable grad
+            model.eval()  # use eval mode for measurement (consistent with run_pilot)
             p1, p2, p3, p4, q = compute_vlm_weight_projs(
                 model, processor, rollouts,
                 [w1, w2, w3, w4, w5],
@@ -181,7 +187,6 @@ def measure_checkpoint_vlm(
                 probe_seed=probe_seed,
                 device=device,
             )
-            model.eval()
 
             p1_buf[s, k] = p1
             p2_buf[s, k] = p2
@@ -191,7 +196,7 @@ def measure_checkpoint_vlm(
 
             # HL_F^2 (analytical, reuse cube_sim)
             from experiments.cube_sim import compute_HL_sq
-            HL_buf[flat_idx]     = compute_HL_sq(baseline, r, rollouts.B, rollouts.N_per_prompt, H, d_B, lambdas)
+            HL_buf[flat_idx]     = compute_HL_sq(baseline, r, rollouts.B, rollouts.N_per_prompt, H, d_B, lambdas, rollouts)
             ghat_norms[flat_idx] = p1.norm()
             gref_norms[flat_idx] = q.norm()
             rew_means[flat_idx]  = r.mean()
@@ -226,20 +231,26 @@ def train_step_vlm(
 ):
     """One VLM policy gradient update step."""
     batch_items = random.sample(data_pool, min(B, len(data_pool)))
-    rollouts = generate_rollouts_vlm(
-        model, processor, batch_items, N,
-        max_new_tokens=256, temperature=1.0, device=device,
-    )
+    if budget == "rollout_alloc":
+        rollouts = generate_rollouts_vlm_var(
+            model, processor, batch_items, N, M=B * N,
+            max_new_tokens=256, temperature=1.0, device=device,
+        )
+    else:
+        rollouts = generate_rollouts_vlm(
+            model, processor, batch_items, N,
+            max_new_tokens=256, temperature=1.0, device=device,
+        )
     r = rollouts.rewards
     M = rollouts.M
 
     d_B = build_D_B_vlm(rollouts, baseline, r)
     H, H0 = build_H(rollouts, budget, r)
-    lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt) if baseline == "stv" else None
-    A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas)
+    lambdas = _compute_stv_lambda(r, rollouts.B, rollouts.N_per_prompt, rollouts) if baseline == "stv" else None
+    A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas, rollouts)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
-    # Compute log probs and accumulate gradients one rollout at a time (memory-efficient).
+    # Compute log probs and accumulate gradients one prompt at a time (memory-efficient).
     # Avoids holding M full computation graphs simultaneously.
     from experiments.vlm_utils import compute_log_probs_batch
     weights = (H * tilde_a).detach()  # (M,) no grad needed
@@ -248,12 +259,14 @@ def train_step_vlm(
     model.train()
     total_loss = 0.0
     for j, item in enumerate(rollouts.items):
+        sl = rollouts.prompt_slice(j)
+        N_j = rollouts.prompt_N(j)
         log_pi_j = compute_log_probs_batch(
             model, processor,
-            [item], rollouts.responses[j * N:(j + 1) * N],
-            N=N, device=device,
-        )  # (N,) with grad
-        loss_j = -(log_pi_j * weights[j * N:(j + 1) * N]).sum()
+            [item], rollouts.responses[sl.start:sl.stop],
+            N=N_j, device=device,
+        )  # (N_j,) with grad
+        loss_j = -(log_pi_j * weights[sl]).sum()
         loss_j.backward()
         total_loss += loss_j.item()
         torch.cuda.empty_cache()
@@ -328,7 +341,7 @@ def run_experiment(args):
 
     for step in range(args.num_train_steps + 1):
         # Checkpoint measurement
-        if args.T > 0 and step % log_interval == 0 and checkpoint_idx < args.T:
+        if args.T > 0 and step % log_interval == 0:
             ckpt_start = time.time()
             dt = datetime.now()
             print(f"  [step={step:4d}] Measuring checkpoint {checkpoint_idx}/{args.T-1}...")
@@ -346,7 +359,7 @@ def run_experiment(args):
                     K=args.K,
                     B=args.B,
                     N=args.N,
-                    probe_seed=args.probe_seed + step,
+                    probe_seed=args.probe_seed,
                     device=device,
                 )
             model.train()
