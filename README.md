@@ -1,20 +1,102 @@
+# CEUS_mmtracking
+
+**[한국어 문서 README_KR.md](README_KR.md)**
+
+---
+
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [SELSA-FiLM (vanilla_FiLM Branch)](#selsa-film-vanilla_film-branch)
+   - [Overview](#overview)
+   - [Architecture](#architecture)
+   - [FiLM Injection Sites](#film-injection-sites)
+   - [New Files Added](#new-files-added)
+3. [Benchmark and Model Zoo](#benchmark-and-model-zoo)
+4. [Setup for CEUS](#setup-for-ceus)
+5. [Data Preparation](#data-preparation)
+6. [Training & Testing](#training--testing)
+
+---
+
 ## Introduction
 
 MMTracking is an open source video perception toolbox by PyTorch. It is a part of [OpenMMLab](https://openmmlab.com) project.
 
 The master branch works with **PyTorch1.6+**.
 
-## Get Started
-
 Please refer to [get_started.md](docs/en/get_started.md) for install instructions.
 
-Please refer to [inference.md](docs/en/user_guides/3_inference.md) for the basic usage of MMTracking. If you want to train and test your own model, please see [dataset_prepare.md](docs/en/user_guides/2_dataset_prepare.md) and [train_test.md](docs/en/user_guides/4_train_test.md).
+---
 
-A Colab tutorial is also provided. You may preview the notebook [here](./demo/MMTracking_Tutorial.ipynb) or directly run it on [Colab](https://colab.research.google.com/github/open-mmlab/mmtracking/blob/master/demo/MMTracking_Tutorial.ipynb).
+## SELSA-FiLM (vanilla_FiLM Branch)
 
-There are also usage [tutorials](docs/en/user_guides/), such as [learning about configs](docs/en/user_guides/1_config.md), [visualization](docs/en/user_guides/5_visualization.md), [analysis tools](docs/en/user_guides/6_analysis_tools.md),
+### Overview
 
-## Benchmark and model zoo
+> **Paper:** *SELSA-FiLM: Phase-Conditioned Video Object Detection for Liver Lesion Detection and Classification in Contrast-Enhanced Ultrasound*
+
+The `vanilla_FiLM` branch extends the SELSA video object detector with **Feature-wise Linear Modulation (FiLM)** to address a fundamental challenge in CEUS: the **phase-structured temporal sequence** problem.
+
+Unlike natural videos where temporal variation reflects object motion, CEUS frames encode discrete physiological states (arterial, portal/late, and Kupffer phases). This causes VID methods to suffer a ~20 mAP performance gap between detection-only (C1: 53.1 mAP@50) and joint detection-and-classification (C2: 33.2 mAP@50) tasks.
+
+**Root Cause (RPN Recall Analysis):**
+| Phase | RPN Recall@50 |
+|-------|---------------|
+| Arterial | 71.0% |
+| Portal/Late | 39.8% |
+| Kupffer | 49.9% ± 17.2% |
+
+Proposal generation itself is phase-sensitive. FiLM conditioning at the backbone level directly addresses this upstream failure.
+
+<img src="resources/figs/fig1.png" alt="Figure 1: SELSA-FiLM Overview" width="100%"/>
+
+*Figure 1. Overview of the phase-structured temporal sequence challenge in CEUS and the proposed SELSA-FiLM framework. SELSA-FiLM leverages a priori phase labels from the imaging protocol to condition the network, preserving phase-specific features.*
+
+### Architecture
+
+SELSA-FiLM integrates FiLM at three architectural sites:
+
+```
+Input → [Backbone] → [Neck] → RPN → [RoI Head] → Output
+            ↑ FiLM      ↑ FiLM          ↑ FiLM
+         (phase conditioning)
+```
+
+FiLM applies per-phase affine transformations to intermediate feature maps:
+
+$$\tilde{F} = \gamma(\text{phase}) \odot F + \beta(\text{phase})$$
+
+where γ and β are learned via a phase embedding and a linear layer. Initialization uses `gamma = 1 + gamma` (identity at init).
+
+<img src="resources/figs/fig2.png" alt="Figure 2: SELSA-FiLM Architecture" width="100%"/>
+
+*Figure 2. Detailed architecture of SELSA-FiLM featuring three-site phase conditioning. FiLM is integrated at the backbone, feature pyramid neck, and RoI head.*
+
+### FiLM Injection Sites
+
+| Mode | Location | Channels | Implementation |
+|------|----------|----------|----------------|
+| `backbone` | After ResNet50 stage4 | 2048 | `FasterRCNNFiLM` |
+| `neck` | After ChannelMapper | 512 | `FasterRCNNFiLM` |
+| `roi` | After RoIAlign | 512 | `SelsaRoIHeadFiLM` |
+
+Each mode has 20 configs: 4 datasets (c1, c2, fnh, hcc) × 5 folds.
+
+### New Files Added
+
+| File | Description |
+|------|-------------|
+| `mmtrack/models/roi_heads/selsa_roi_head_film.py` | RoI-level FiLM head (`SelsaRoIHeadFiLM`) |
+| `configs/_base_/models/faster-rcnn_r50-dc5-FiLM.py` | Base model config with FiLM support |
+| `configs/vid/selsa_ceus_film_backbone/` | Backbone FiLM experiments (20 configs) |
+| `configs/vid/selsa_ceus_film_neck/` | Neck FiLM experiments (20 configs) |
+| `configs/vid/selsa_ceus_film_roi/` | RoI FiLM experiments (20 configs) |
+| `resources/figs/fig1.png` | Method overview figure |
+| `resources/figs/fig2.png` | Detailed architecture figure |
+
+---
+
+## Benchmark and Model Zoo
 
 Results and models are available in the [model zoo](docs/en/model_zoo.md).
 
@@ -26,10 +108,12 @@ Supported Methods
 - [x] [FGFA](configs/vid/fgfa) (ICCV 2017)
 - [x] [SELSA](configs/vid/selsa) (ICCV 2019)
 - [x] [Temporal RoI Align](configs/vid/temporal_roi_align) (AAAI 2021)
+- [x] **SELSA-FiLM** (vanilla_FiLM branch) — CEUS phase-conditioned VID
 
 Supported Datasets
 
 - [x] [ILSVRC](http://image-net.org/challenges/LSVRC/2015/)
+- [x] CEUS (internal dataset: C1, C2, FNH, HCC)
 
 ### Multi-Object Tracking
 
@@ -78,109 +162,120 @@ Supported Datasets
 - [x] [GOT10k](http://got-10k.aitestunion.com/)
 - [x] [VOT2018](https://www.votchallenge.net/vot2018/)
 
-## For CEUS
+---
 
-### 1. conda 생성
+## Setup for CEUS
 
 ```bash
-# 1. 환경 생성
+# 1. Create conda environment
 conda create -n mmlab python=3.9 -y
 conda activate mmlab
 
-# 2. pytorch, torchvision, cuda
+# 2. Install PyTorch
 conda install pytorch=1.11.0 torchvision cudatoolkit=11.3 -c pytorch
 
-# 3. mmengine
+# 3. Install mmengine
 pip install 'mmengine==0.10.7'
 
-# 4. mmcv
+# 4. Install mmcv
 pip install 'mmcv==2.0.0rc4' -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.11/index.html
 
-# 5. mmdet
+# 5. Install mmdetection
 git clone -b v3.0.0rc5 https://github.com/open-mmlab/mmdetection.git
 cd mmdetection
 pip install -r requirements/build.txt
 conda install "numpy<2"
 pip install -v -e . --no-build-isolation
-
-# 6. mmtrack
 cd ..
-git clone https://github.com/limlimlim00/CEUS_mmtracking.git
+
+# 6. Install mmtracking (this repo)
+git clone https://github.com/khkim1729/cube.git CEUS_mmtracking
 cd CEUS_mmtracking
+git checkout vanilla_FiLM
 pip install -r requirements/build.txt
 pip install -v -e . --no-build-isolation
 
-# 7. eval용 라이브러리
+# 7. Additional libraries
 pip install git+https://github.com/JonathonLuiten/TrackEval.git
-
-# 8. opencv-python version (6번에서 나온 에러: numpy와 호환되게)
 pip uninstall -y opencv-python
 pip install 'opencv-python==4.7.0.72'
-
-# 9. 데모
-python demo/demo_mot_vis.py configs/mot/deepsort/deepsort_faster-rcnn_r50_fpn_8xb2-4e_mot17halftrain_test-mot17halfval.py --input demo/demo.mp4 --output mot.mp4
 ```
 
-### 2. data 폴더 만들기
-- mmtracking 하위에 data/CEUS 폴더 생성
-- data/CEUS 내부에 annotations, Annotations, Data 폴더 생성
-- Annotations 내부에 원본 padding json 넣기
-- Data 내부에 원본 데이터 넣기
+---
+
+## Data Preparation
+
+### Directory Structure
 
 ```
-mmtracking/
-├── data/
-│   └── CEUS/
-│       ├── annotations/
-│       │
-│       ├── Annotations/
-│       │   ├── post_padding.json
-│       │   ├── post_padding_aug.json
-│       │   ├── pre_padding.json
-│       │   ├── pre_padding_aug.json
-│       │   ├── rand_padding.json
-│       │   └── rand_padding_aug.json
-│       │
-│       └── Data/
-│           ├── fold_0/
-│           ├── fold_1/
-│           ├── fold_2/
-│           ├── fold_3/
-│           └── fold_4/
+CEUS_mmtracking/
+└── data/
+    └── CEUS/
+        ├── annotations/
+        │   └── video/
+        │       ├── c1/    # ceus_video_c1_fold{k}_{split}.json
+        │       ├── c2/
+        │       ├── fnh/
+        │       └── hcc/
+        ├── Annotations/   # Raw annotation JSONs
+        │   ├── post_padding.json
+        │   ├── pre_padding.json
+        │   └── rand_padding.json
+        └── Data/          # Raw CEUS video frames
+            ├── fold_0/
+            ├── fold_1/
+            ├── fold_2/
+            ├── fold_3/
+            └── fold_4/
 ```
 
-### 3. COCOVID json
-- json을 cocovid json 형식으로 수정
-- `tools/dataset_converters/ceus/ceus2coco.py` 실행 (전역변수 경로 수정) - annotations 폴더에 ceus_train.json, ceus_val.json 생성
-- `tools/dataset_converters/ceus/fill_blank.py` 실행 (전역변수 경로 수정) - blank.png 생성
+### Convert to COCOVID Format
 
-### 4. Configs
-- configs/vid 폴더 내부에 모델 별로 config 분류
-- config 이름 형식: `{모델}_{백본}_{GPU 갯수 및 batch 크기}-{epoch 수}_{데이터셋}.py`
-- ex. dff_faster-rcnn_r50-dc5_1xb1-10e_ceusvid
-  - 모델: dff
-  - 백본: faster-rcnn_r50-dc5
-  - GPU, batch: 1xb1 (GPU 1개, batch size 1)
-  - epoch: 10
-  - 데이터셋: ceusvid
+```bash
+python tools/dataset_converters/ceus/ceus2coco.py
+python tools/dataset_converters/ceus/fill_blank.py
+```
 
-### 5. Train
-- `python tools/train.py /home/introai21/mmtracking/configs/vid/dff/dff_faster-rcnn_r50-dc5_1xb1-30e_ceusvid.py --work-dir /home/introai21/mmtracking/results/dff_r50_30e`
-- 인자
-  - config 경로 (필수)
-  - `--work-dir`: 결과 저장 경로
-- results/dff_r50_30e 과 같이 결과 저장 폴더(results) 내부에 실험 제목 폴더(dff_r50_30e) 하나 더 만들어야 함
-- 내부에 timestamp 폴더가 또 생기기 때문
+---
 
-### 6. Training Plot
-- `python tools/analysis_tools/draw_log_plots.py --json results/dff_r50_30e/20251011_174344/vis_data/20251011_174344.json --out_dir results/dff_r50_30e/20251011_174344/vis_data`
-- 인자
-  - `--json`: training 결과 json 경로
-  - `--out_dir`: plot 저장 경로
+## Training & Testing
 
-### 7. Test & Visualization
-- `python tools/test.py /home/introai21/mmtracking/configs/vid/selsa/selsa_faster-rcnn_r101-dc5_1xb8-30e_ceusapc1vid.py --checkpoint /home/introai21/mmtracking/results/selsa_r101_b8_30e_apc1/best_coco_bbox_mAP_50_epoch_12.pth --work-dir /home/introai21/mmtracking/results/selsa_r101_b8_30e_apc1`
-- 인자
-  - config 경로 (필수)
-  - `--checkpoint`: test에 사용할 체크포인트
-  - `--work-dir`: 실험 결과 저장할 폴더 (vis 폴더 내부에 시각화 결과 저장)
+### Config naming convention
+
+```
+{film_site}-{epochs}e_{dataset}_fold{k}.py
+  Example: film_backbone-12e_c1_fold0.py
+```
+
+### Train
+
+```bash
+python tools/train.py \
+    configs/vid/selsa_ceus_film_backbone/film_backbone-12e_c1_fold0.py \
+    --work-dir experiments/film_backbone_c1_fold0
+```
+
+### Test
+
+```bash
+python tools/test.py \
+    configs/vid/selsa_ceus_film_backbone/film_backbone-12e_c1_fold0.py \
+    --checkpoint experiments/film_backbone_c1_fold0/best_coco_bbox_mAP_50_epoch_X.pth \
+    --work-dir experiments/film_backbone_c1_fold0
+```
+
+### Run all experiments (train + test)
+
+```bash
+bash configs/vid/selsa_ceus_film_backbone/train_and_test.sh
+bash configs/vid/selsa_ceus_film_neck/train_and_test.sh
+bash configs/vid/selsa_ceus_film_roi/train_and_test.sh
+```
+
+### Training Plot
+
+```bash
+python tools/analysis_tools/draw_log_plots.py \
+    --json results/exp_name/timestamp/vis_data/timestamp.json \
+    --out_dir results/exp_name/timestamp/vis_data
+```
