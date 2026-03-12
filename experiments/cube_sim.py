@@ -443,7 +443,7 @@ def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: flo
 def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: float = 0.25, keep_ratio: float = 0.5) -> Tuple[torch.Tensor, torch.Tensor]:
     """Build budget diagonal H (M,) and reference H0 (M,).
 
-    H0: uniform 1/(B*N_j) for all rollouts
+    H0: fixed uniform reference 1/(B*N_base) for all rollouts
     H:  modified by budget strategy
     """
     M = rollouts.M
@@ -479,16 +479,14 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
 
     elif budget == "rollout_alloc":
         H = torch.zeros(M, device=device)
-        H0_out = H0.clone()
         if rollouts.N_list is not None:
-            # Variable rollout allocation: actual N_j were sampled.
-            # H = H0 = 1/(N_j * B) per prompt → delta_H = 0 (no budget/fusion bias).
-            # RolloutAlloc affects only variance (HL_F^2), not bias.
+            # Variable rollout allocation: use actual N_j in H.
+            # Keep H0 fixed to the common reference so allocation-induced
+            # budget/fusion bias can be measured.
             for j in range(B):
                 sl = rollouts.prompt_slice(j)
                 N_j = rollouts.prompt_N(j)
                 H[sl] = 1.0 / (N_j * B)
-                H0_out[sl] = 1.0 / (N_j * B)
         else:
             # Uniform N: weight proportionally to per-prompt reward mean
             means = torch.tensor([
@@ -500,7 +498,7 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
                 s, e = j * N, (j + 1) * N
                 H[s:e] = (1.0 / N) * means[j] / B
 
-        return H, H0_out
+        return H, H0
 
     elif budget == "subset_select":
         # Keep top-k rollouts per prompt by reward
