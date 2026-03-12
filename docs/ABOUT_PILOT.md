@@ -124,6 +124,7 @@
 ---
 
 ### 수정 5: H_0에 N_j 미반영 수정 (rollout_alloc)
+- $H_0$는 Budget에 따라 달라지면 안될 것 같습니다. 수정 전 버전이 맞는 것 같습니다.
 
 **파일**: `experiments/cube_sim.py` — `build_H` 함수
 
