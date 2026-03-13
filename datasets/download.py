@@ -18,7 +18,7 @@ Datasets used in CUBE experiments (VLM-RL benchmarks):
     - lmms-lab/MMMU_Pro                       (college-level multi-discipline)
 
   Science / OCR:
-    - HuggingFaceM4/ScienceQA                 (science with images)
+    - HuggingFaceM4/ScienceQAImg_Modif        (science with images)
     - Yelp/yelp_review_full                   (text-only baseline)
 
 Usage:
@@ -61,7 +61,7 @@ DATASET_REGISTRY = {
         "modality": "image+text",
     },
     "scienceqa": {
-        "hf_name": "HuggingFaceM4/ScienceQA",
+        "hf_name": "HuggingFaceM4/ScienceQAImg_Modif",
         "splits": ["train", "validation", "test"],
         "task": "science_qa",
         "modality": "image+text",

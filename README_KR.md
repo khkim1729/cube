@@ -348,7 +348,7 @@ Var_S[hat_mu_s]는 E_X[Var[g|X]]/K 만큼 overestimate → 이를 차감하여 V
 | **MMStar** | `Lin-Chen/MMStar` | 멀티모달 추론 | val | 1,500 |
 | **ChartQA** | `HuggingFaceM4/ChartQA` | 차트 이해 | test | 2,500 |
 | **MMBench** | `lmms-lab/MMBench` | 멀티태스크 | dev_en | 4,377 |
-| **ScienceQA** | `HuggingFaceM4/ScienceQA` | 과학 이미지 QA | test | 2,017 |
+| **ScienceQA** | `HuggingFaceM4/ScienceQAImg_Modif` | 과학 이미지 QA | test | 2,017 |
 | **MMMU-Pro** | `lmms-lab/MMMU_Pro` | 대학 수준 추론 | test | 3,460 |
 | **VQAv2** | `HuggingFaceM4/VQAv2` | 시각적 질의응답 | validation | — |
 | **OK-VQA** | `Multimodal-Fatima/OK-VQA_train` | 지식 기반 VQA | train | 9,009 |
