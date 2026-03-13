@@ -68,6 +68,7 @@ DATASET_REGISTRY = {
     },
     "mmmu_pro": {
         "hf_name": "MMMU/MMMU_Pro",
+        "config_name": "vision",
         "splits": ["validation", "test"],
         "task": "college_reasoning",
         "modality": "image+text",
@@ -77,6 +78,8 @@ DATASET_REGISTRY = {
         "splits": ["train", "validation"],
         "task": "visual_qa",
         "modality": "image+text",
+        "disabled": True,
+        "disabled_reason": "script-based dataset unsupported in current datasets version",
     },
     "okvqa": {
         "hf_name": "Multimodal-Fatima/OK-VQA_train",
