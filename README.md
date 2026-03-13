@@ -166,7 +166,7 @@ CUBE experiments use the following VLM benchmarks (available via HuggingFace Hub
 | Dataset | HF Name | Task | Size |
 |---------|---------|------|------|
 | **MathVista** | `AI4Math/MathVista` | Math reasoning | 6,141 |
-| **MMStar** | `lmms-lab/MMStar` | Multimodal reasoning | 1,500 |
+| **MMStar** | `Lin-Chen/MMStar` | Multimodal reasoning | 1,500 |
 | **ChartQA** | `HuggingFaceM4/ChartQA` | Chart understanding | 32,717 |
 | **MMBench** | `lmms-lab/MMBench` | Multi-task | 4,377 |
 | **ScienceQA** | `HuggingFaceM4/ScienceQA` | Science with images | 21,208 |

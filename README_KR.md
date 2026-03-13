@@ -345,7 +345,7 @@ Var_S[hat_mu_s]는 E_X[Var[g|X]]/K 만큼 overestimate → 이를 차감하여 V
 | 데이터셋 | HuggingFace ID | 태스크 | 분할 | 크기 |
 |---------|---------------|--------|------|------|
 | **MathVista** | `AI4Math/MathVista` | 수학적 추론 | testmini | 1,000 |
-| **MMStar** | `lmms-lab/MMStar` | 멀티모달 추론 | val | 1,500 |
+| **MMStar** | `Lin-Chen/MMStar` | 멀티모달 추론 | val | 1,500 |
 | **ChartQA** | `HuggingFaceM4/ChartQA` | 차트 이해 | test | 2,500 |
 | **MMBench** | `lmms-lab/MMBench` | 멀티태스크 | dev_en | 4,377 |
 | **ScienceQA** | `HuggingFaceM4/ScienceQA` | 과학 이미지 QA | test | 2,017 |
