@@ -127,8 +127,19 @@ def download_dataset(
             f"Available splits: {available_splits}"
         )
 
-    print(f"Downloading {hf_name} ({split})...")
-    ds = load_dataset(hf_name, split=split, cache_dir=cache_dir)
+    config_name = info.get("config_name")
+    disabled = info.get("disabled", False)
+    disabled_reason = info.get("disabled_reason", "disabled by registry")
+
+    if disabled:
+        raise ValueError(f"Dataset '{name}' is disabled: {disabled_reason}")
+
+    if config_name is not None:
+        print(f"Downloading {hf_name} [{config_name}] ({split})...")
+        ds = load_dataset(hf_name, config_name, split=split, cache_dir=cache_dir)
+    else:
+        print(f"Downloading {hf_name} ({split})...")
+        ds = load_dataset(hf_name, split=split, cache_dir=cache_dir)
 
     # Save JSON metadata
     out_path = Path(output_dir) / name
