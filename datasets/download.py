@@ -13,9 +13,9 @@ Datasets used in CUBE experiments (VLM-RL benchmarks):
   Math / Multimodal Reasoning:
     - AI4Math/MathVista                       (multimodal math reasoning)
     - HuggingFaceM4/ChartQA                   (chart understanding)
-    - lmms-lab/MMBench                        (multi-task benchmark)
+    - lmms-lab/MMBench_EN                     (multi-task benchmark)
     - Lin-Chen/MMStar                         (hard multimodal reasoning)
-    - lmms-lab/MMMU_Pro                       (college-level multi-discipline)
+    - MMMU/MMMU_Pro                           (college-level multi-discipline)
 
   Science / OCR:
     - HuggingFaceM4/ScienceQAImg_Modif        (science with images)
@@ -55,8 +55,8 @@ DATASET_REGISTRY = {
         "modality": "image+text",
     },
     "mmbench": {
-        "hf_name": "lmms-lab/MMBench",
-        "splits": ["dev_en", "test_en"],
+        "hf_name": "lmms-lab/MMBench_EN",
+        "splits": ["dev", "test"],
         "task": "multi_task",
         "modality": "image+text",
     },
@@ -67,7 +67,7 @@ DATASET_REGISTRY = {
         "modality": "image+text",
     },
     "mmmu_pro": {
-        "hf_name": "lmms-lab/MMMU_Pro",
+        "hf_name": "MMMU/MMMU_Pro",
         "splits": ["validation", "test"],
         "task": "college_reasoning",
         "modality": "image+text",
