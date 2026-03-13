@@ -69,7 +69,7 @@ DATASET_REGISTRY = {
     "mmmu_pro": {
         "hf_name": "MMMU/MMMU_Pro",
         "config_name": "vision",
-        "splits": ["validation", "test"],
+        "splits": ["test"],
         "task": "college_reasoning",
         "modality": "image+text",
     },

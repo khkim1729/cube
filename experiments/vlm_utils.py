@@ -128,17 +128,26 @@ DATASET_CONFIGS = {
         "image_field": "image",
         "type": "chart",
     },
+    "mmbench": {
+        "hf_name": "lmms-lab/MMBench_EN",
+        "split": "test",
+        "gold_field": "answer",
+        "question_field": "question",
+        "image_field": "image",
+        "type": "mcq",
+    },
     "scienceqa": {
-        "hf_name": "derek-thomas/ScienceQA",
+        "hf_name": "HuggingFaceM4/ScienceQAImg_Modif",
         "split": "test",
         "gold_field": None,   # special: answer_idx → choices[idx]
         "question_field": "question",
         "image_field": "image",
         "type": "mcq",
     },
-    "mmbench": {
-        "hf_name": "HuggingFaceM4/MMBench",
-        "split": "dev_en",
+    "mmmu_pro": {
+        "hf_name": "MMMU/MMMU_Pro",
+        "config_name": "vision",
+        "split": "test",
         "gold_field": "answer",
         "question_field": "question",
         "image_field": "image",
@@ -170,7 +179,11 @@ def load_vlm_dataset(name: str, split: str = None, n_pool: int = 512) -> list:
     cfg = DATASET_CONFIGS[name]
     ds_split = split or cfg["split"]
     print(f"  Loading dataset {cfg['hf_name']} split={ds_split} ...")
-    ds = load_dataset(cfg["hf_name"], split=ds_split, trust_remote_code=True)
+    config_name = cfg.get("config_name")
+    if config_name is None:
+        ds = load_dataset(cfg["hf_name"], split=ds_split, trust_remote_code=True)
+    else:
+        ds = load_dataset(cfg["hf_name"], config_name, split=ds_split, trust_remote_code=True)
 
     items = []
     for ex in ds:
