@@ -353,6 +353,8 @@ Var_S[hat_mu_s]는 E_X[Var[g|X]]/K 만큼 overestimate → 이를 차감하여 V
 | **VQAv2** | `HuggingFaceM4/VQAv2` | 시각적 질의응답 | validation | — |
 | **OK-VQA** | `Multimodal-Fatima/OK-VQA_train` | 지식 기반 VQA | train | 9,009 |
 
+> **참고:** `HuggingFaceM4/VQAv2`는 이 리포지토리에서 사용되는 기본 `datasets` 버전에서 지원되지 않는 데이터세트 로드 스크립트에 의존하기 때문에 `VQAv2`는 현재 기본 CUBE 설정에서 비활성화되어 있습니다. 데이터 세트 항목은 완전성을 위해 유지되지만 기본 다운로드 및 실험 파이프라인에서는 제외됩니다.
+
 **저장 위치:**
 - 원본 데이터: `~/.cache/huggingface/hub/` (HuggingFace 기본 캐시, `HF_HOME` 환경 변수로 변경 가능)
 - 메타데이터: `datasets/<dataset_name>/<split>_meta.json` (샘플 ID 매핑용)
@@ -431,6 +433,8 @@ pip install -r requirements.txt
 
 # 3. 데이터셋 다운로드
 python datasets/download.py --dataset mathvista --split testmini
+> **호환성 참고 사항:** 일부 HuggingFace 데이터세트에는 사용자 정의 로딩 스크립트가 필요합니다. 기본 환경에서는 `VQAv2`가 비활성화되고 표준 파이프라인에서 제외됩니다.
+
 ```
 
 ---

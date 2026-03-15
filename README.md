@@ -174,6 +174,8 @@ CUBE experiments use the following VLM benchmarks (available via HuggingFace Hub
 | **VQAv2** | `HuggingFaceM4/VQAv2` | Visual QA | 214,354 |
 | **OK-VQA** | `Multimodal-Fatima/OK-VQA_train` | Knowledge VQA | 9,009 |
 
+> **Note:** `VQAv2` is currently disabled in the default CUBE setup because `HuggingFaceM4/VQAv2` depends on a dataset loading script that is not supported by the default `datasets` version used in this repository. The dataset entry is kept for completeness, but it is excluded from the default download and experiment pipeline.
+
 ```bash
 # Download a dataset
 python datasets/download.py --dataset mathvista --split testmini
@@ -197,6 +199,7 @@ pip install -r requirements.txt
 
 # 3. Download a dataset
 python datasets/download.py --dataset mathvista --split testmini
+> **Compatibility note:** Some HuggingFace datasets require custom loading scripts. In the default environment, `VQAv2` is disabled and excluded from the standard pipeline.
 
 # 4. Run bias/variance sweep (dry run, no GPU required)
 python experiments/run_experiment.py --dry_run
