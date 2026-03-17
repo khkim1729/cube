@@ -1,5 +1,5 @@
 """
-CUBE VLM Experiment Runner — single (baseline × budget) run on Qwen2-VL-7B-Instruct.
+CUBE VLM Experiment Runner — single (baseline × budget) run on Qwen2-VL-3B-Instruct (default smaller model).
 
 Usage:
     # Dry run (1 step, no checkpoint):
@@ -300,7 +300,11 @@ def run_experiment(args):
     meta_path = out_dir / f"{args.run_id}_meta.json"
 
     # Load model + dataset
-    model, processor = load_qwen_model(lora_rank=args.lora_rank, device=device)
+    model, processor = load_qwen_model(
+        lora_rank=args.lora_rank,
+        device=device,
+        model_id=args.model_id,
+    )
     data_pool = load_vlm_dataset(args.dataset, split=None, n_pool=args.n_pool)
     random.seed(args.data_seed)
 
@@ -315,6 +319,7 @@ def run_experiment(args):
         "baseline": args.baseline,
         "budget": args.budget,
         "dataset": args.dataset,
+        "model_id": args.model_id,
         "lora_rank": args.lora_rank,
         "gpu_id": args.gpu_id,
         "M": args.M, "B": args.B, "N": args.N,
@@ -441,6 +446,7 @@ def parse_args():
     p.add_argument("--dataset",    type=str, default="mathvista",
                    choices=["mathvista", "mmstar", "chartqa", "scienceqa", "mmbench"])
     p.add_argument("--gpu_id",     type=int, default=1)
+    p.add_argument("--model_id",   type=str, default="Qwen/Qwen2-VL-3B-Instruct")
     p.add_argument("--run_id",     type=str, default=None)
     p.add_argument("--output_dir", type=str, default="experiments/results_vlm")
     p.add_argument("--dry_run",    action="store_true")
