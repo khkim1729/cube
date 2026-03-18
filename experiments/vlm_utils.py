@@ -74,7 +74,7 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
     print(f"  Loading {model_id} ...")
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_id,
-        dtype=torch.bfloat16,
+        dtype=torch.float16,
         device_map=device,
         trust_remote_code=True,
     )
@@ -83,7 +83,7 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
         model_id,
         trust_remote_code=True,
         min_pixels=256 * 28 * 28,
-        max_pixels=512 * 28 * 28,   # Colab 기준 변경
+        max_pixels=256 * 28 * 28,   # Colab 기준 변경
     )
 
     lora_config = LoraConfig(
