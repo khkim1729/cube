@@ -78,7 +78,13 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
         device_map=device,
         trust_remote_code=True,
     )
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    # processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        min_pixels=256 * 28 * 28,
+        max_pixels=512 * 28 * 28,   # Colab 기준 변경
+    )
 
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
