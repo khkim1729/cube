@@ -645,45 +645,90 @@ def compute_vlm_weight_projs(
 ) -> list:
     """Compute R probe projections via n_w weighted backward passes for a VLM.
 
-    Replaces compute_multi_weight_projs from cube_sim.py for variable-length VLM sequences.
-
-    Strategy:
-      1. Compute log π(y_m | x_m) for each m → (M,) list of scalars with grad
-      2. For each weight vector w_i: loss = Σ_m w_i[m] * log_pi[m]
-         backward → per-param grads → probe_project_grads → (R,)
-
-    Returns list of n_w tensors, each (R,).
+    Memory-efficient implementation: compute and backward each rollout scalar individually
+    so we never keep the full M-length computation graph in memory.
     """
     M = rollouts.M
-    N = rollouts.N_per_prompt
-    B = rollouts.B
     n_w = len(weight_vecs)
 
     # Get LoRA parameters (trainable only)
     lora_params = [p for p in model.parameters() if p.requires_grad]
 
-    # Compute log_pi for all M rollouts (each scalar with grad in computation graph)
-    log_pi_list = compute_log_probs_batch(
-        model, processor,
-        rollouts.items,
-        rollouts.responses,
-        N=rollouts.N_per_prompt,
-        device=device,
-        N_list=rollouts.N_list,
-    )  # (M,) tensor with grad
+    # Initialize projection results for each weight vector
+    results = [torch.zeros(R, device=device) for _ in range(n_w)]
+    per_weight_seeds = [probe_seed + i for i in range(n_w)]
 
-    results = []
-    for i, w in enumerate(weight_vecs):
-        # loss = Σ_m w[m] * log_pi[m]
-        loss = (w.detach() * log_pi_list).sum()
-        retain = (i < n_w - 1)
-        grads = torch.autograd.grad(
-            loss, lora_params,
-            retain_graph=retain,
-            create_graph=False,
-            allow_unused=True,
+    # Build prompt-level tokenized inputs once per item and do per-response forward/backward.
+    flat_idx = 0
+    for j, item in enumerate(rollouts.items):
+        N_j = rollouts.prompt_N(j)
+
+        messages = build_qwen_prompt(item)
+        text_prompt = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
         )
-        proj = probe_project_grads(grads, R, seed=probe_seed, device=device)
-        results.append(proj)
+        proc_out = processor(
+            text=[text_prompt],
+            images=[item.get("image")] if item.get("image") else None,
+            return_tensors="pt",
+        ).to(device)
+
+        prompt_ids = proc_out.input_ids  # (1, L_prompt)
+        L_p = prompt_ids.shape[1]
+
+        for k in range(N_j):
+            resp = rollouts.responses[flat_idx]
+            resp_ids = processor.tokenizer(
+                resp, return_tensors="pt", add_special_tokens=False
+            ).input_ids.to(device)
+            full_ids = torch.cat([prompt_ids, resp_ids], dim=1)
+
+            model_kwargs = {"input_ids": full_ids}
+            if "attention_mask" in proc_out:
+                extra_mask = torch.ones(
+                    (1, resp_ids.shape[1]), device=device,
+                    dtype=proc_out.attention_mask.dtype
+                )
+                model_kwargs["attention_mask"] = torch.cat(
+                    [proc_out.attention_mask, extra_mask], dim=1
+                )
+            if "pixel_values" in proc_out:
+                model_kwargs["pixel_values"] = proc_out.pixel_values
+            if "image_grid_thw" in proc_out:
+                model_kwargs["image_grid_thw"] = proc_out.image_grid_thw
+            if "mm_token_type_ids" in proc_out:
+                extra_type = torch.zeros(
+                    (1, resp_ids.shape[1]), device=device,
+                    dtype=proc_out.mm_token_type_ids.dtype
+                )
+                model_kwargs["mm_token_type_ids"] = torch.cat(
+                    [proc_out.mm_token_type_ids, extra_type], dim=1
+                )
+
+            out = model(**model_kwargs)
+            logits = out.logits[0]
+            shift_logits = logits[L_p - 1:-1]
+            shift_labels = resp_ids[0]
+            log_probs = torch.log_softmax(shift_logits, dim=-1)
+            log_pi = log_probs[
+                torch.arange(len(shift_labels), device=device), shift_labels
+            ].sum()
+
+            grads = torch.autograd.grad(
+                log_pi, lora_params,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=True,
+            )
+
+            for i in range(n_w):
+                w_val = float(weight_vecs[i][flat_idx].detach().item())
+                if w_val == 0.0:
+                    continue
+                proj = probe_project_grads(grads, R, seed=per_weight_seeds[i], device=device)
+                results[i] += w_val * proj
+
+            flat_idx += 1
+            torch.cuda.empty_cache()
 
     return results
