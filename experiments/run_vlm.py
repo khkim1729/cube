@@ -341,6 +341,9 @@ def run_experiment(args):
     log_interval = max(1, args.num_train_steps // args.T) if args.T > 0 else args.num_train_steps + 1
     total_start = time.time()
     checkpoint_idx = 0
+    best_reward = -float('inf')
+    ckpt_dir = out_dir / args.run_id
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     for step in range(args.num_train_steps + 1):
         # Checkpoint measurement
@@ -404,6 +407,21 @@ def run_experiment(args):
                 f"reward={metrics['reward_mean']:.3f} | "
                 f"vr={vr:.3f} | t={ckpt_elapsed:.1f}s"
             )
+            
+            # Save best checkpoint
+            current_reward = float(metrics['reward_mean'])
+            if current_reward > best_reward:
+                best_reward = current_reward
+                best_ckpt = ckpt_dir / "best"
+                model.save_pretrained(best_ckpt)
+                processor.save_pretrained(best_ckpt)
+                print(f"    [Best] saved at step {step}, reward={current_reward:.3f}")
+            
+            # Save last checkpoint
+            last_ckpt = ckpt_dir / "last"
+            model.save_pretrained(last_ckpt)
+            processor.save_pretrained(last_ckpt)
+            
             checkpoint_idx += 1
 
         # Train step
@@ -421,6 +439,8 @@ def run_experiment(args):
 
     meta["end_time"] = datetime.now().isoformat()
     meta["total_elapsed_seconds"] = round(total_elapsed, 2)
+    meta["best_ckpt_path"] = str(ckpt_dir / "best")
+    meta["last_ckpt_path"] = str(ckpt_dir / "last")
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 
