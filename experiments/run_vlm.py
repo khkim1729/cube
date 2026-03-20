@@ -157,13 +157,15 @@ def measure_checkpoint_vlm(
                 rollouts = generate_rollouts_vlm_var(
                     model, processor, batch_items, N, M=B * N,
                     # max_new_tokens=256, temperature=1.0, device=device,
-                    max_new_tokens=128, temperature=1.0, device=device,
+                    # max_new_tokens=128, temperature=1.0, device=device,
+                    max_new_tokens=64, temeprature=1.0, device=device,
                 )
             else:
                 rollouts = generate_rollouts_vlm(
                     model, processor, batch_items, N,
                     # max_new_tokens=256, temperature=1.0, device=device,
-                    max_new_tokens=128, temperature=1.0, device=device,
+                    # max_new_tokens=128, temperature=1.0, device=device,
+                    max_new_tokens=64, temperature=1.0, device=device,
                 )
             r = rollouts.rewards  # (M,)
 
@@ -240,13 +242,15 @@ def train_step_vlm(
         rollouts = generate_rollouts_vlm_var(
             model, processor, batch_items, N, M=B * N,
             # max_new_tokens=256, temperature=1.0, device=device,
-            max_new_tokens=128, temperature=1.0, device=device,
+            # max_new_tokens=128, temperature=1.0, device=device,
+            max_new_tokens=64, temperature=1.0, device=device,
         )
     else:
         rollouts = generate_rollouts_vlm(
             model, processor, batch_items, N,
             # max_new_tokens=256, temperature=1.0, device=device,
-            max_new_tokens=128, temperature=1.0, device=device,
+            # max_new_tokens=128, temperature=1.0, device=device,
+            max_new_tokens=64, temperature=1.0, device=device,
         )
     r = rollouts.rewards
     M = rollouts.M
