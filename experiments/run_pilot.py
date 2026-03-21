@@ -164,6 +164,12 @@ def train_step(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_experiment(args):
+    # T1 fix: M is the primary parameter; N is derived from M and B.
+    # This ensures B * N == M exactly everywhere (train_step, measure_checkpoint).
+    if args.M % args.B != 0:
+        raise ValueError(f"M ({args.M}) must be divisible by B ({args.B})")
+    args.N = args.M // args.B  # override --N flag; always derive from M/B
+
     device = f"cuda:{args.gpu_id}"
     torch.cuda.set_device(args.gpu_id)
 

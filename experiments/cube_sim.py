@@ -463,7 +463,8 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
         # These prompts provide no learning signal; including them wastes compute.
         skip_set = set()
         for j in range(B):
-            r_j = rewards[j * N:(j + 1) * N]
+            sl = rollouts.prompt_slice(j)
+            r_j = rewards[sl]
             if r_j.var(unbiased=False).item() < 1e-8:
                 skip_set.add(j)
 
@@ -473,50 +474,45 @@ def build_H(rollouts: Rollouts, budget: str, rewards: torch.Tensor, skip_ratio: 
 
         H = H0.clone()
         for j in skip_set:
-            H[j * N:(j + 1) * N] = 0.0
+            H[rollouts.prompt_slice(j)] = 0.0
 
         return H, H0
 
     elif budget == "rollout_alloc":
+        # rollout_alloc always uses sample_rollouts_var, which sets N_list.
+        # H[rollout in group j] = 1 / (N_j * B):
+        #   - each prompt contributes equal total weight 1/B regardless of N_j
+        #   - H0 (uniform 1/(B*N_base) = 1/M) is kept as reference → delta_H ≠ 0
+        assert rollouts.N_list is not None, (
+            "rollout_alloc budget requires variable rollouts (N_list); "
+            "use sample_rollouts_var to sample rollouts."
+        )
         H = torch.zeros(M, device=device)
-        if rollouts.N_list is not None:
-            # Variable rollout allocation: use actual N_j in H.
-            # Keep H0 fixed to the common reference so allocation-induced
-            # budget/fusion bias can be measured.
-            for j in range(B):
-                sl = rollouts.prompt_slice(j)
-                N_j = rollouts.prompt_N(j)
-                H[sl] = 1.0 / (N_j * B)
-        else:
-            # Uniform N: weight proportionally to per-prompt reward mean
-            means = torch.tensor([
-                rewards[j * N:(j + 1) * N].mean().clamp(min=0.05).item()
-                for j in range(B)
-            ], device=device)
-            means = means / means.mean()  # normalize to mean=1
-            for j in range(B):
-                s, e = j * N, (j + 1) * N
-                H[s:e] = (1.0 / N) * means[j] / B
-
+        for j in range(B):
+            sl = rollouts.prompt_slice(j)
+            N_j = rollouts.prompt_N(j)
+            H[sl] = 1.0 / (N_j * B)
         return H, H0
 
     elif budget == "subset_select":
-        # Keep top-k rollouts per prompt by reward
+        # Keep top-k rollouts per prompt by reward.
+        # k is based on N_per_prompt (uniform base N; subset_select always has N_list=None).
         k = max(1, int(N * keep_ratio))
         w = torch.zeros(M, device=device)
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            r_j = rewards[s:e]
+            sl = rollouts.prompt_slice(j)
+            r_j = rewards[sl]
             _, top_idx = r_j.topk(k, largest=True)
-            w[s + top_idx] = 1.0
+            flat_offset = sl.start
+            w[flat_offset + top_idx] = 1.0
 
         H = torch.zeros(M, device=device)
         for j in range(B):
-            s, e = j * N, (j + 1) * N
-            w_j = w[s:e]
+            sl = rollouts.prompt_slice(j)
+            w_j = w[sl]
             Z_j = w_j.sum()
             if Z_j > 0:
-                H[s:e] = (w_j / Z_j) / B
+                H[sl] = (w_j / Z_j) / B
 
         return H, H0
 
