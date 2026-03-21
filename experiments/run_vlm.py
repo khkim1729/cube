@@ -54,14 +54,28 @@ from experiments.cube_sim import (
 # build_D_B adapted for VLM Rollouts (same logic as cube_sim.build_D_B)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_D_B_vlm(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+SIGMA_ZERO = 1e-12
+
+def build_D_B_vlm(
+    rollouts: Rollouts,
+    baseline: str,
+    rewards: torch.Tensor,
+    sigma_zero: float = SIGMA_ZERO,
+) -> torch.Tensor:
     M, B = rollouts.M, rollouts.B
     d = torch.ones(M, device=rewards.device)
+
     if baseline == "grpo":
         for j in range(B):
             sl = rollouts.prompt_slice(j)
-            sigma = rewards[sl].std(unbiased=False).clamp(min=eps)
-            d[sl] = 1.0 / sigma
+            sigma = rewards[sl].std(unbiased=False)
+
+            # zero-variance prompt: learning signal이 없으므로 스케일도 0으로 둠
+            if float(sigma.item()) < sigma_zero:
+                d[sl] = 0.0
+            else:
+                d[sl] = 1.0 / sigma
+
     return d
 
 
