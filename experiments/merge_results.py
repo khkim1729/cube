@@ -58,8 +58,8 @@ def merge_csv(results_dir: str = "experiments/results") -> Path:
         last = rows[-1]
         print(
             f"{bl:<12} {bg:<16} {len(rows):<6} "
-            f"{float(last['total_bias_norm']):<20.6f} "
-            f"{float(last['fusion_bias_proj_mean']):<20.6f} "
+            f"{float(last['total_bias_norm']):<20.6e} "
+            f"{float(last['fusion_bias_proj_mean']):<20.6e} "
             f"{float(last['HL_proxy_mean']):<20.4e} "
             f"{float(last['reward_mean']):.3f}"
         )

@@ -110,6 +110,7 @@ def load_llm_model(lora_rank: int = 16, device: str = "cuda"):
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
     model.print_trainable_parameters()
+    print(f"  LoRA adapter applied and ready.", flush=True)
 
     return model, tokenizer
 
@@ -176,12 +177,13 @@ def load_llm_dataset(name: str, split: str = None, n_pool: int = 512) -> list:
 
     cfg = DATASET_CONFIGS.get(name, DATASET_CONFIGS["gsm8k"])
     ds_split = split or cfg["split"]
-    print(f"  Loading dataset {cfg['hf_name']} split={ds_split} ...")
+    print(f"  Fetching {cfg['hf_name']} (split={ds_split}) from HuggingFace...", flush=True)
     config_name = cfg.get("config_name")
     if config_name is None:
-        ds = load_dataset(cfg["hf_name"], split=ds_split, trust_remote_code=True)
+        ds = load_dataset(cfg["hf_name"], split=ds_split)
     else:
-        ds = load_dataset(cfg["hf_name"], config_name, split=ds_split, trust_remote_code=True)
+        ds = load_dataset(cfg["hf_name"], config_name, split=ds_split)
+    print(f"  Fetched {len(ds)} total items. Processing first {n_pool}...", flush=True)
 
     items = []
     for ex in ds:

@@ -395,7 +395,8 @@ def run_experiment(args):
                 "elapsed_seconds": round(total_elapsed, 2),
                 "checkpoint_elapsed_seconds": round(ckpt_elapsed, 2),
                 "reward_verifiable_ratio": round(vr, 4),
-                **{k: round(v, 6) for k, v in metrics.items()},
+                # Keep full float precision in CSV to avoid tiny metrics being rounded to zero.
+                **{k: float(v) for k, v in metrics.items()},
             }
             append_csv_row(csv_path, row)
 

@@ -300,6 +300,7 @@ def run_experiment(args):
     meta_path = out_dir / f"{args.run_id}_meta.json"
 
     # Load model + dataset
+    print(f"  Loading model...", flush=True)
     model, tokenizer = load_llm_model(lora_rank=args.lora_rank, device=device)
     data_pool = load_llm_dataset(args.dataset, split=None, n_pool=args.n_pool)
     random.seed(args.data_seed)
@@ -395,15 +396,16 @@ def run_experiment(args):
                 "elapsed_seconds": round(total_elapsed, 2),
                 "checkpoint_elapsed_seconds": round(ckpt_elapsed, 2),
                 "reward_verifiable_ratio": round(vr, 4),
-                **{k: round(v, 6) for k, v in metrics.items()},
+                # Keep full float precision in CSV to avoid tiny metrics being rounded to zero.
+                **{k: float(v) for k, v in metrics.items()},
             }
             append_csv_row(csv_path, row)
 
             print(
-                f"    total_bias={metrics['total_bias_norm']:.4f} | "
+                f"    total_bias={metrics['total_bias_norm']:.3e} | "
                 # f"fusion_bias={metrics['fusion_bias_proj_mean']:.4f} | "
-                f"fusion_bias={metrics['fusion_bias_rms']:.4f} | "
-                f"HL={metrics['HL_proxy_mean']:.4f} | "
+                f"fusion_bias={metrics['fusion_bias_rms']:.3e} | "
+                f"HL={metrics['HL_proxy_mean']:.3e} | "
                 f"reward={metrics['reward_mean']:.3f} | "
                 f"vr={vr:.3f} | t={ckpt_elapsed:.1f}s"
             )
