@@ -301,7 +301,34 @@ def train_step_vlm(
 # Main Experiment
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _save_loss_plot(steps: list, losses: list, rewards: list, path: Path):
+    """Save training loss and reward curves to a PNG file."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+        ax1.plot(steps, losses, linewidth=1.0)
+        ax1.set_ylabel("Training Loss")
+        ax1.grid(True, alpha=0.3)
+        ax2.plot(steps, rewards, linewidth=1.0, color="tab:orange")
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("Reward Mean")
+        ax2.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [warn] Could not save loss plot: {e}")
+
+
 def run_experiment(args):
+    # T1 fix: M is the primary parameter; N is derived from M and B.
+    if args.M % args.B != 0:
+        raise ValueError(f"M ({args.M}) must be divisible by B ({args.B})")
+    args.N = args.M // args.B  # override --N flag; always derive from M/B
+
     device = f"cuda:{args.gpu_id}"
     torch.cuda.set_device(args.gpu_id)
 
@@ -355,6 +382,7 @@ def run_experiment(args):
     log_interval = max(1, args.num_train_steps // args.T) if args.T > 0 else args.num_train_steps + 1
     total_start = time.time()
     checkpoint_idx = 0
+    loss_steps, loss_history, reward_history = [], [], []
 
     for step in range(args.num_train_steps + 1):
         # Checkpoint measurement
@@ -412,7 +440,6 @@ def run_experiment(args):
 
             print(
                 f"    total_bias={metrics['total_bias_norm']:.4f} | "
-                # f"fusion_bias={metrics['fusion_bias_proj_mean']:.4f} | "
                 f"fusion_bias={metrics['fusion_bias_rms']:.4f} | "
                 f"HL={metrics['HL_proxy_mean']:.4f} | "
                 f"reward={metrics['reward_mean']:.3f} | "
@@ -427,11 +454,20 @@ def run_experiment(args):
                 model, processor, optimizer, data_pool,
                 args.baseline, args.budget, args.B, args.N, device,
             )
+            loss_steps.append(step)
+            loss_history.append(loss)
+            reward_history.append(rew)
             if step % max(1, args.num_train_steps // 20) == 0:
                 print(f"  [step={step:4d}] loss={loss:.4f}  reward={rew:.3f}  vr={vr:.3f}")
 
     total_elapsed = time.time() - total_start
     print(f"  [{args.run_id}] Done in {total_elapsed:.1f}s → {csv_path}")
+
+    # Save loss/reward plot
+    if loss_history:
+        plot_path = out_dir / f"{args.run_id}_loss.png"
+        _save_loss_plot(loss_steps, loss_history, reward_history, plot_path)
+        print(f"  Loss plot saved → {plot_path}")
 
     meta["end_time"] = datetime.now().isoformat()
     meta["total_elapsed_seconds"] = round(total_elapsed, 2)

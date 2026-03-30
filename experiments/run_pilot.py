@@ -163,6 +163,28 @@ def train_step(
 # Main Experiment
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _save_loss_plot(steps: list, losses: list, rewards: list, path):
+    """Save training loss and reward curves to a PNG file."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+        ax1.plot(steps, losses, linewidth=1.0)
+        ax1.set_ylabel("Training Loss")
+        ax1.grid(True, alpha=0.3)
+        ax2.plot(steps, rewards, linewidth=1.0, color="tab:orange")
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("Reward Mean")
+        ax2.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [warn] Could not save loss plot: {e}")
+
+
 def run_experiment(args):
     # T1 fix: M is the primary parameter; N is derived from M and B.
     # This ensures B * N == M exactly everywhere (train_step, measure_checkpoint).
@@ -230,6 +252,7 @@ def run_experiment(args):
     log_interval = max(1, args.num_train_steps // args.T) if args.T > 0 else args.num_train_steps + 1
     total_start = time.time()
     checkpoint_idx = 0
+    loss_steps, loss_history, reward_history = [], [], []
 
     for step in range(args.num_train_steps + 1):
         # ── Log at checkpoint ──────────────────────────────────────────────
@@ -298,9 +321,18 @@ def run_experiment(args):
                 args.baseline, args.budget,
                 args.B, args.N, rng, device,
             )
+            loss_steps.append(step)
+            loss_history.append(loss)
+            reward_history.append(rew)
 
     total_elapsed = time.time() - total_start
     print(f"  [{args.run_id}] Done in {total_elapsed:.1f}s → {csv_path}")
+
+    # Save loss/reward plot
+    if loss_history:
+        plot_path = out_dir / f"{args.run_id}_loss.png"
+        _save_loss_plot(loss_steps, loss_history, reward_history, plot_path)
+        print(f"  Loss plot saved → {plot_path}")
 
     # Update meta with end time
     meta["end_time"] = datetime.now().isoformat()
