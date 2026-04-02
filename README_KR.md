@@ -11,6 +11,8 @@
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
+- [코드 수정 사항 (v7)](#코드-수정-사항-v7)
+- [코드 수정 사항 (v6)](#코드-수정-사항-v6)
 - [코드 수정 사항 (v5)](#코드-수정-사항-v5)
 - [코드 수정 사항 (v4)](#코드-수정-사항-v4)
 - [코드 수정 사항 (v3)](#코드-수정-사항-v3)
@@ -163,6 +165,73 @@ cube/
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
 
 ---
+
+## 코드 수정 사항 (v7)
+
+> **커밋:** `ca25ba5` — mschoi 브랜치 병합 + GRPO 제로-분산 D_B 수정, run_vlm T1, 손실 그래프
+
+### 1. GRPO 제로-분산 D_B 폭발 방지 (`experiments/cube_sim.py`, `experiments/run_vlm.py`)
+
+**이전 (문제):** `build_D_B` 및 `build_D_B_vlm`에서 GRPO 정규화 시 `σ.clamp(min=1e-8)` 사용. 프롬프트 내 모든 롤아웃이 동일한 보상(σ=0)이면 D_B = 1/1e-8 = 1e8 → HL proxy 폭발.
+
+**수정 후 (mschoi 브랜치 병합):** σ < 1e-12이면 `d[sl] = 0.0`으로 직접 설정. 학습 신호가 없으면 스케일도 0:
+
+```python
+sigma = rewards[sl].std(unbiased=False)
+if float(sigma.item()) < 1e-12:
+    d[sl] = 0.0   # zero-variance: 학습 신호 없음
+else:
+    d[sl] = 1.0 / sigma
+```
+
+- `cube_sim.py` `build_D_B` (파일럿) 및 `run_vlm.py` `build_D_B_vlm` (VLM) 모두 동일 수정
+- 검증: 전체 보상=0인 경우 HL = 0.0 (이전에는 1e16 이상 폭발)
+
+### 2. run_vlm.py T1 수정: N = M // B 강제 (`experiments/run_vlm.py`)
+
+`run_pilot.py`와 동일하게 N을 M과 B로부터 유도:
+
+```python
+if args.M % args.B != 0:
+    raise ValueError(f"M ({args.M}) must be divisible by B ({args.B})")
+args.N = args.M // args.B  # --N CLI 값 무시; M/B로 덮어씀
+```
+
+### 3. 학습 손실/보상 곡선 PNG 저장 (`experiments/run_pilot.py`, `experiments/run_vlm.py`)
+
+실험 완료 후 `{run_id}_loss.png` 자동 저장 (matplotlib Agg 백엔드):
+
+- 상단 패널: 학습 손실(Training Loss) vs 스텝
+- 하단 패널: 평균 보상(Reward Mean) vs 스텝
+- matplotlib 미설치 시 경고 출력 후 무시 (실험 중단 없음)
+
+```bash
+# 저장 위치
+experiments/results/{run_id}_loss.png       # run_pilot.py
+experiments/results_vlm/{run_id}_loss.png   # run_vlm.py
+```
+
+### v7 파일럿 검증 결과
+
+v7 코드로 4개 조합 검증 실행 (GPU 1 A100 80GB, M=256, B=32, S=4, K=2, R=16, num_train_steps=20):
+
+| 베이스라인 | 예산 | Fusion Bias | Total Var | HL proxy | 평균 보상 |
+|----------|------|:-----------:|:---------:|:--------:|:--------:|
+| RLOO | None | 0.0000 ✓ | 0.0016 ✓ | 4.5e-3 | 0.098 |
+| GRPO | SubsetSelect | 0.0081 ✓ | 0.0306 ✓ | 3.2e-2 | 0.098 |
+| GRPO | RolloutAlloc | 0.0189 ✓ | 0.0039 ✓ | 6.8e-3 ✓ | 0.092 |
+| STV | PromptSkip | 0.0011 ✓ | 0.0015 ✓ | 2.4e-3 | 0.098 |
+
+확인 사항:
+- RLOO×None: Fusion Bias = 0 (구조적 영조건 ✓)
+- 비영 budget 조합: Fusion Bias 비영, Total Var 비영 ✓
+- GRPO×RolloutAlloc: HL = 6.8e-3 (이전 폭발 없음 ✓) — D_B 제로-분산 수정 효과
+- 모든 조합에서 loss PNG 저장 ✓
+
+> **설계 변경 주의 (이전 세션 T2 수정 영향):** `build_H` rollout_alloc에서 H0를 균일 reference(1/(B×N\_base))로 유지하도록 변경됨. delta\_H = H − H0 ≠ 0 이 되어 **v5에서 확인된 "RAlloc→Fusion≡0" 구조적 영조건이 더 이상 성립하지 않음**. GRPO×RolloutAlloc Fusion Bias = 0.019 (비영).
+
+---
+
 ## 코드 수정 사항 (v6)
 
 ### 1. RMS 편향 스칼라 추가 (`experiments/cube_sim.py`)
