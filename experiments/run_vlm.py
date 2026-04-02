@@ -267,8 +267,8 @@ def train_step_vlm(
     A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas, rollouts)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
-    # Compute log probs and accumulate gradients one prompt at a time (memory-efficient).
-    # Avoids holding M full computation graphs simultaneously.
+    # Compute log probs and accumulate gradients ONE ROLLOUT AT A TIME (memory-efficient).
+    # Avoids holding N_j vision-encoder activation graphs simultaneously.
     from experiments.vlm_utils import compute_log_probs_batch
     weights = (H * tilde_a).detach()  # (M,) no grad needed
 
@@ -278,20 +278,24 @@ def train_step_vlm(
     for j, item in enumerate(rollouts.items):
         sl = rollouts.prompt_slice(j)
         N_j = rollouts.prompt_N(j)
-        log_pi_j = compute_log_probs_batch(
-            model, processor,
-            [item], rollouts.responses[sl.start:sl.stop],
-            N=N_j, device=device,
-        )  # (N_j,) with grad
-        loss_j = -(log_pi_j * weights[sl]).sum()
-        loss_j.backward()
-        total_loss += loss_j.item()
-        torch.cuda.empty_cache()
+        offset = sl.start
+        for k in range(N_j):
+            resp = rollouts.responses[offset + k]
+            log_pi_mk = compute_log_probs_batch(
+                model, processor,
+                [item], [resp], N=1, device=device,
+            )  # (1,) with grad — single forward pass in memory
+            loss_mk = -(log_pi_mk[0] * weights[offset + k])
+            loss_mk.backward()
+            total_loss += loss_mk.item()
+            del log_pi_mk, loss_mk
+            torch.cuda.empty_cache()
 
     torch.nn.utils.clip_grad_norm_(
         [p for p in model.parameters() if p.requires_grad], max_norm=1.0
     )
     optimizer.step()
+    optimizer.zero_grad()  # clean up after step
 
     verifiable_ratio = ((r > 0).float().mean()).item()
     return total_loss, r.mean().item(), verifiable_ratio
@@ -440,11 +444,19 @@ def run_experiment(args):
 
             print(
                 f"    total_bias={metrics['total_bias_norm']:.4f} | "
+                f"budget_bias={metrics['budget_bias_rms']:.4f} | "
                 f"fusion_bias={metrics['fusion_bias_rms']:.4f} | "
                 f"HL={metrics['HL_proxy_mean']:.4f} | "
                 f"reward={metrics['reward_mean']:.3f} | "
                 f"vr={vr:.3f} | t={ckpt_elapsed:.1f}s"
             )
+            # Warn when reward=0 with non-none budget (budget/fusion_bias trivially 0)
+            if metrics['reward_mean'] == 0.0 and args.budget != "none":
+                print(
+                    f"    [warn] reward=0 → budget_bias=fusion_bias=0 (trivially). "
+                    f"Model not yet producing correct answers for sampled prompts. "
+                    f"Expected to resolve after training."
+                )
             checkpoint_idx += 1
 
         # Train step

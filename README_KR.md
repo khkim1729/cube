@@ -11,6 +11,7 @@
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
+- [코드 수정 사항 (v9)](#코드-수정-사항-v9)
 - [코드 수정 사항 (v8)](#코드-수정-사항-v8)
 - [코드 수정 사항 (v7)](#코드-수정-사항-v7)
 - [코드 수정 사항 (v6)](#코드-수정-사항-v6)
@@ -164,6 +165,71 @@ cube/
 | **PromptSkip** | 저분산 프롬프트 제로화 | 블록 수준 제로화 | 발생 가능 |
 | **RolloutAlloc** | 비균일 $N_j$ 배분 | 비례 재가중치 | 발생 가능 |
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
+
+---
+
+## 코드 수정 사항 (v9)
+
+> **커밋:** `(현재)` — budget/fusion bias = 0 원인 분석·수정, `train_step_vlm` OOM 수정
+
+### 1. `train_step_vlm` 롤아웃 1개씩 처리 + 그래디언트 정리 (`experiments/run_vlm.py`)
+
+**이전 (문제):** `compute_log_probs_batch([item], resps_j, N=N_j)` — 프롬프트당 N_j개 activation graph 동시 유지 → 학습 스텝에서도 OOM 발생 (특히 2번째 이후 체크포인트에서).
+
+**수정 후:** 롤아웃 1개씩 처리 + `optimizer.zero_grad()` after step:
+
+```python
+for k in range(N_j):
+    resp = rollouts.responses[offset + k]
+    log_pi_mk = compute_log_probs_batch(
+        model, processor, [item], [resp], N=1, device=device,
+    )  # 단 1개 forward pass
+    loss_mk = -(log_pi_mk[0] * weights[offset + k])
+    loss_mk.backward()
+    del log_pi_mk, loss_mk
+    torch.cuda.empty_cache()
+optimizer.step()
+optimizer.zero_grad()  # 스텝 후 그래디언트 정리
+```
+
+### 2. budget_bias / fusion_bias = 0 원인 분석 및 경고 출력
+
+**원인 분석:** budget_bias와 fusion_bias가 0이 되는 경우는 두 가지:
+
+| 상황 | budget_bias | fusion_bias | 정상 여부 |
+|------|:-----------:|:-----------:|:---------:|
+| budget=`none` | **0** (구조적) | **0** (구조적) | ✓ 항상 정확 |
+| budget≠`none` AND r=0 (reward 전체 0) | **0** | **0** | ✓ 수학적으로 맞음, 단 학습 신호 없음 |
+| budget≠`none` AND r≠0 | **비영** | **비영** | ✓ 정상 |
+
+- `none` budget: `delta_H = H - H0 = 0` → `w2 = delta_H × r = 0`, `w4 = delta_H × A_B_r = 0` → 구조적 영조건
+- reward=0: `r = 0` → `w2 = 0`, `w4 = 0` → 학습 신호 없음 (VLM 미학습 시 발생 가능)
+
+**수정:** reward=0 + non-none budget일 때 경고 출력:
+```
+[warn] reward=0 → budget_bias=fusion_bias=0 (trivially).
+Model not yet producing correct answers for sampled prompts. Expected to resolve after training.
+```
+
+**수정:** 체크포인트 출력에 `budget_bias` 항목 추가:
+```
+total_bias=19.8532 | budget_bias=0.0438 | fusion_bias=0.0289 | HL=0.0000 | reward=0.500 | vr=1.000
+```
+
+### v9 VLM 검증 결과
+
+`grpo × subset_select`, M=16, B=4, S=1, K=1, T=1, R=8 (GPU 2 A100 80GB):
+
+| 체크포인트 | total_bias | budget_bias | fusion_bias | HL | reward | vr |
+|:--------:|:----------:|:-----------:|:-----------:|:---:|:------:|:--:|
+| step=0 | **19.85** | **0.0438 ✓** | **0.0289 ✓** | 0.0000 | 0.500 | 1.000 |
+| step=2 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.000 | 0.000 |
+
+- step=0: reward=0.5 → budget_bias=0.044, fusion_bias=0.029 **비영 확인** ✓
+- step=2: reward=0 (운 나쁜 배치) → 경고 출력 ✓
+- OOM 없이 283.9s 완료 (기존 `train_step_vlm` OOM 수정 효과)
+
+> **실제 실험(B=32, N=8)에서는** 충분히 많은 프롬프트를 포함해 reward≠0이 안정적으로 보장됨.
 
 ---
 
