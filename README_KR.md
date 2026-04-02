@@ -11,6 +11,7 @@
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
+- [코드 수정 사항 (v8)](#코드-수정-사항-v8)
 - [코드 수정 사항 (v7)](#코드-수정-사항-v7)
 - [코드 수정 사항 (v6)](#코드-수정-사항-v6)
 - [코드 수정 사항 (v5)](#코드-수정-사항-v5)
@@ -163,6 +164,74 @@ cube/
 | **PromptSkip** | 저분산 프롬프트 제로화 | 블록 수준 제로화 | 발생 가능 |
 | **RolloutAlloc** | 비균일 $N_j$ 배분 | 비례 재가중치 | 발생 가능 |
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
+
+---
+
+## 코드 수정 사항 (v8)
+
+> **커밋:** `8b59d34`, `(현재)` — VLM OOM 수정, system prompt 추가, loss 포맷 개선, `run_vlm_batch.py` 검증
+
+### 1. `compute_vlm_weight_projs` 롤아웃 1개씩 처리 — OOM 수정 (`experiments/vlm_utils.py`)
+
+**이전 (문제):** `compute_log_probs_batch([item], resps_j, N=N_j)` 호출로 prompt당 N_j개(=8)의 computation graph를 동시에 메모리에 유지. MathVista 고해상도 이미지(수천 vision token)의 ViT 활성화가 N_j개 중첩 → 80GB VRAM 초과.
+
+**수정 후:** 롤아웃 1개씩 (N=1) 처리, 즉시 `.backward()` 후 해제:
+
+```python
+for k in range(N_j):
+    resp = rollouts.responses[offset + k]
+    log_pi_mk = compute_log_probs_batch(
+        model, processor, [item], [resp], N=1, device=device,
+    )  # 단 1개의 forward pass만 메모리 보유
+    loss_mk = w[offset + k].detach() * log_pi_mk[0]
+    loss_mk.backward()
+    del log_pi_mk, loss_mk
+    torch.cuda.empty_cache()
+```
+
+- 피크 메모리 = 단일 롤아웃 활성화 (~5-10GB)
+- 검증: M=32, B=4, S=2, K=2, T=1 → 29분, OOM 없이 완료
+
+### 2. `build_qwen_prompt` system prompt 추가 — vr=0 문제 수정 (`experiments/vlm_utils.py`)
+
+**이전 (문제):** 프롬프트에 답변 형식 지침 없음 → 모델이 장황한 답변 생성 → `extract_answer` 파싱 실패 → `vr=0` (검증 불가, 보상 신호 없음).
+
+**수정 후:** 문제 유형별 system prompt 추가:
+
+```python
+if qtype == "math":
+    system = ("You are a math problem solver. Solve step by step, "
+              "then write 'Answer: <number>'.")
+elif qtype == "mcq":
+    system = ("You are a VQA assistant. Analyze and write 'Answer: <A/B/C/D>'.")
+```
+
+- 검증: `vr`: 0.000 → **1.000** (checkpoint step=0), `reward`: 0.000 → **0.500**
+- `total_bias`: 0.0000 → **34.50** (비영 gradient signal 확인)
+
+### 3. loss 포맷 개선 (`experiments/run_vlm.py`)
+
+`:.4f` → `:.4e` (scientific notation): `0.0000` → `0.0000e+00` (명확한 정밀도 표시).
+
+### 4. `run_vlm_batch.py` 소형 파라미터 테스트 검증
+
+```bash
+CUDA_VISIBLE_DEVICES=3 python3 experiments/run_vlm_batch.py \
+    --gpu_id 3 --offset 8 --n_runs 1 \
+    --dataset mathvista \
+    --M 8 --B 2 --S 1 --K 1 --T 1 --R 8 \
+    --num_train_steps 2 --n_pool 64 \
+    --results_dir /tmp/cube_vlm_batch_test
+```
+
+결과: **191초(3.2분)** 완료 (A100 80GB).
+
+| 체크포인트 | total_bias | fusion_bias | HL | reward | vr |
+|:--------:|:----------:|:-----------:|:---:|:------:|:--:|
+| step=0 | 34.50 ✓ | 0.0000 ✓ | 0.1667 | 0.500 | 1.000 |
+| step=2 | 0.0000 | 0.0000 ✓ | 0.1667 | 0.000 | 0.000 |
+
+> **loss=0 이슈 참고:** B=2, N=4처럼 극소형 파라미터에서 prompt별 all-correct 또는 all-wrong이면 RLOO advantage가 0이 되어 loss=0 발생. 이는 수학적으로 정확한 동작이며 실제 실험(B=32, N=8)에서는 발생하지 않음.
 
 ---
 

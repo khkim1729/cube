@@ -235,17 +235,35 @@ def build_qwen_prompt(item: dict) -> list:
     """Build Qwen2-VL chat messages list for processor.apply_chat_template.
 
     Returns list of message dicts (chat template format).
+    Includes a system prompt to enforce concise answer format for reward parsing.
     """
+    qtype = item.get("type", "math")
+    if qtype == "math":
+        system = (
+            "You are a math problem solver. "
+            "Solve the problem step by step, then write your final answer "
+            "as 'Answer: <number>'."
+        )
+    elif qtype == "mcq":
+        system = (
+            "You are a visual question answering assistant. "
+            "Analyze the image and question, then write your final answer "
+            "as 'Answer: <A/B/C/D>'."
+        )
+    else:
+        system = (
+            "Analyze the question carefully and provide a concise answer. "
+            "Write your final answer as 'Answer: <answer>'."
+        )
+
     content = []
     if item.get("image") is not None:
         content.append({"type": "image", "image": item["image"]})
     content.append({"type": "text", "text": item["question"]})
 
     messages = [
-        {
-            "role": "user",
-            "content": content,
-        }
+        {"role": "system", "content": system},
+        {"role": "user", "content": content},
     ]
     return messages
 

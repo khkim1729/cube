@@ -375,7 +375,7 @@ def run_experiment(args):
             model, processor, optimizer, data_pool,
             args.baseline, args.budget, args.B, args.N, device,
         )
-        print(f"  dry_run train step: loss={loss:.4f}, reward={rew:.3f}, verifiable_ratio={vr:.3f}")
+        print(f"  dry_run train step: loss={loss:.4e}, reward={rew:.3f}, verifiable_ratio={vr:.3f}")
         return csv_path
 
     # Training & logging loop
@@ -458,7 +458,7 @@ def run_experiment(args):
             loss_history.append(loss)
             reward_history.append(rew)
             if step % max(1, args.num_train_steps // 20) == 0:
-                print(f"  [step={step:4d}] loss={loss:.4f}  reward={rew:.3f}  vr={vr:.3f}")
+                print(f"  [step={step:4d}] loss={loss:.4e}  reward={rew:.3f}  vr={vr:.3f}")
 
     total_elapsed = time.time() - total_start
     print(f"  [{args.run_id}] Done in {total_elapsed:.1f}s → {csv_path}")
