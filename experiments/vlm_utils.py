@@ -639,45 +639,52 @@ def compute_vlm_weight_projs(
 ) -> list:
     """Compute R probe projections via n_w weighted backward passes for a VLM.
 
-    Replaces compute_multi_weight_projs from cube_sim.py for variable-length VLM sequences.
+    Memory-efficient: accumulates gradients ONE ROLLOUT AT A TIME via .backward(),
+    so only a single rollout's activation graph (one ViT + one LM forward pass)
+    is in memory at a time.  This avoids OOM for large images (many vision tokens).
 
-    Strategy:
-      1. Compute log π(y_m | x_m) for each m → (M,) list of scalars with grad
-      2. For each weight vector w_i: loss = Σ_m w_i[m] * log_pi[m]
-         backward → per-param grads → probe_project_grads → (R,)
+    For each weight vector w_i:
+      ∇_θ [Σ_m w_i[m] log π_m] = Σ_j Σ_{m∈j} w_i[m] ∇_θ log π_m
+      → accumulate via .backward() over M individual rollouts.
 
     Returns list of n_w tensors, each (R,).
     """
-    M = rollouts.M
-    N = rollouts.N_per_prompt
-    B = rollouts.B
     n_w = len(weight_vecs)
-
-    # Get LoRA parameters (trainable only)
     lora_params = [p for p in model.parameters() if p.requires_grad]
-
-    # Compute log_pi for all M rollouts (each scalar with grad in computation graph)
-    log_pi_list = compute_log_probs_batch(
-        model, processor,
-        rollouts.items,
-        rollouts.responses,
-        N=rollouts.N_per_prompt,
-        device=device,
-        N_list=rollouts.N_list,
-    )  # (M,) tensor with grad
 
     results = []
     for i, w in enumerate(weight_vecs):
-        # loss = Σ_m w[m] * log_pi[m]
-        loss = (w.detach() * log_pi_list).sum()
-        retain = (i < n_w - 1)
-        grads = torch.autograd.grad(
-            loss, lora_params,
-            retain_graph=retain,
-            create_graph=False,
-            allow_unused=True,
+        # Zero stale gradients from previous weight vector
+        for p in lora_params:
+            p.grad = None
+
+        # Accumulate: process ONE ROLLOUT at a time → single activation graph
+        for j, item in enumerate(rollouts.items):
+            sl = rollouts.prompt_slice(j)
+            N_j = rollouts.prompt_N(j)
+            offset = sl.start
+
+            for k in range(N_j):
+                resp = rollouts.responses[offset + k]
+                log_pi_mk = compute_log_probs_batch(
+                    model, processor,
+                    [item], [resp], N=1, device=device,
+                )  # (1,) with grad — only ONE forward pass in memory
+                loss_mk = w[offset + k].detach() * log_pi_mk[0]
+                loss_mk.backward()
+                del log_pi_mk, loss_mk
+                torch.cuda.empty_cache()
+
+        # Read accumulated gradients → probe projection
+        grads = tuple(
+            p.grad.clone() if p.grad is not None else None
+            for p in lora_params
         )
         proj = probe_project_grads(grads, R, seed=probe_seed, device=device)
         results.append(proj)
+
+    # Clean up
+    for p in lora_params:
+        p.grad = None
 
     return results
