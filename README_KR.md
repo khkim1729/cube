@@ -171,64 +171,88 @@ cube/
 
 ## 코드 수정 사항 (v10)
 
-> **커밋:** (현재) — budget_bias=0 3번째 원인 규명 및 전체 CSV 데이터 분석
+> **커밋:** `a7f1893` → `(현재)` — budget_bias=0 전체 원인 규명, 신버전 CSV 추가 분석
 
-### 1. budget_bias=0의 3번째 원인: `prompt_skip`의 수학적 구조
+### 1. 문제 제기: reward > 0인데 budget_bias=0인 케이스 1724건
 
-v9에서 두 가지 알려진 영(zero) 케이스를 정리했는데, 실제 CSV 데이터를 분석하니 **reward > 0임에도 budget_bias=0인 케이스가 1724건** 발견됐습니다. 모두 `prompt_skip` (1968건 중 다수) 또는 `rollout_alloc` (264건)에서 발생했습니다.
+v9에서 두 가지 알려진 0값 케이스를 정리했는데, 전체 CSV 데이터(구버전 400개, 신버전 14개)를 분석하자 **reward > 0이면서 budget≠none인데도 budget_bias=0인 케이스 1724건**이 확인됐습니다. 모두 `prompt_skip` 또는 `rollout_alloc` 조합이었습니다.
 
-#### 원인 1: `rollout_alloc` 구버전 버그 (v7에서 수정됨)
+### 2. 원인 분석
 
-v5 이전 코드에서 `rollout_alloc`는 H0을 프롬프트별 N_j에 맞춰 `1/(N_j*B)`로 설정하고 있었습니다. 이렇게 하면 `delta_H = H - H0 = 0`이 되어 **구조적으로 항상 0**이 됩니다. v7에서 H0를 `1/(B*N_base)` (균등 기준)으로 수정하면서 해결됐습니다.
+#### 원인 A: `rollout_alloc` 구버전 버그 (v7에서 수정)
 
-#### 원인 2: `prompt_skip`의 수학적 특성 (저정확도 조건)
+v5 이전 코드에서 `rollout_alloc`의 기준 행렬 H0가 잘못 설정돼 있었습니다. H0를 균등(1/M)으로 두지 않고 프롬프트별 할당량 N_j에 맞춘 `1/(N_j*B)`로 설정했기 때문에 `delta_H = H - H0 = 0`이 되어 **구조적으로 항상 0**이었습니다. v7에서 H0를 균등 기준으로 수정했고, 현재 코드에서는 정상적으로 비영 값이 나옵니다.
 
-`prompt_skip`은 **분산이 0인 프롬프트(전부 맞거나 전부 틀린 그룹)**를 건너뜁니다. 이때 delta_H의 구조가 중요합니다:
+#### 원인 B: `prompt_skip`의 수학적 특성
 
-- **건너뛰는 프롬프트** (분산=0): H[m]=0, H0[m]=1/(B·N) → `delta_H = -1/(B·N)` ≠ 0
-- **살아남는 프롬프트** (분산>0): H[m]=1/(B·N), H0[m]=1/(B·N) → `delta_H = 0`
+`prompt_skip`은 **rollout 내에서 보상 분산이 0인 프롬프트(전부 맞거나 전부 틀린 그룹)를 건너뜁니다**. 이때 H와 H0의 구조:
 
-`budget_bias = E[Ψ · delta_H · r]`에 대입하면:
+```
+건너뛰는 프롬프트(분산=0): H[m] = 0,       H0[m] = 1/(B·N)  →  delta_H = -1/(B·N)
+살아남는 프롬프트(분산>0): H[m] = 1/(B·N),  H0[m] = 1/(B·N)  →  delta_H =  0
+```
+
+`budget_bias = E[Ψ · delta_H · r]`에서:
 - 살아남는 프롬프트: `delta_H = 0` → 기여 = 0
-- 건너뛰는 프롬프트: `delta_H ≠ 0`이지만, **저정확도(~14%)에서는 건너뛰는 게 전부 "전부 틀린" 프롬프트** (r=0) → `delta_H × r = delta_H × 0 = 0`
+- 건너뛰는 프롬프트: `delta_H ≠ 0`이지만…
 
-→ **정확도가 낮을 때는 수학적으로 budget_bias=0이 필연입니다. 버그가 아닙니다.**
+**저정확도(~11%) 조건에서 건너뛰는 이유는 "전부 틀렸기" 때문(r=0).** 따라서 `delta_H × r = (-1/(B·N)) × 0 = 0`.
 
-budget_bias가 비영이 되는 건 학습 후반부에서 **"전부 맞는" 프롬프트**(r=1)가 등장할 때입니다. 그 프롬프트는 건너뛰어지면서 `delta_H = -1/(B·N) ≠ 0`, `r = 1` → `delta_H × r ≠ 0`이 됩니다.
+→ **결론: 저정확도에서 모든 항이 0이므로 budget_bias=0은 수학적으로 필연입니다.**
 
-#### 구버전 vs 신버전 CSV 비교
+budget_bias가 0이 아니려면 **"전부 맞는" 프롬프트(all-correct, r=1)** 가 있어야 합니다. 그런 프롬프트는 건너뛰어지면서 `delta_H = -1/(B·N) ≠ 0`, `r = 1` → 기여 ≠ 0이 됩니다.
 
-CSV 컬럼 형식으로 구버전(v6 이전, `budget_bias_proj_mean` 컬럼)과 신버전(v7 이후, `budget_bias_rms` 컬럼)을 구분해서 확인했습니다:
+### 3. 확률적 분석: N에 따른 all-correct 발생률
 
-| CSV 형식 | 파일 수 | reward>0 + budget≠none + budget_bias=0 케이스 |
-|---------|:------:|:--:|
-| 구버전 (`proj_mean`) | 400개 | **1724건** |
-| 신버전 (`rms`) | 5개 | **0건** |
+ToyPolicy의 정확도는 약 11%입니다. 프롬프트 하나에서 N번 샘플링 시 **"전부 맞을" 확률은 0.11^N**입니다:
 
-→ 1724건은 모두 구버전 코드(v5 이전)에서 생성된 것이며, **현재 코드에서는 해당 이슈 없음**.
+| N (rollouts/prompt) | P(all-correct 1개 이상) | 실험 200회 중 발생 횟수 |
+|:-------------------:|:-----------------------:|:-------------------:|
+| N=2 | ~2% | 35/200 (17.5%) |
+| N=4 | ~0.015% | 0/200 |
+| N=8 | ~0.000% | 0/200 |
 
-### 2. 완전한 budget_bias=0 케이스 정리 (v9 표 업데이트)
+**표준 설정(N=8)에서는 all-correct 프롬프트가 사실상 절대 발생하지 않습니다.** 따라서 `prompt_skip`의 budget_bias는 ToyPolicy 실험 조건에서 항상 0입니다.
 
-| 실험 조건 | budget_bias | fusion_bias | 해석 |
-|----------|:-----------:|:-----------:|------|
-| budget = `none` | **0** | **0** | 구조적 영조건 (항상, 모든 버전) |
-| budget ≠ `none`, reward = 0 | **0** | **0** | 학습 초기 일시적 현상 |
-| `prompt_skip`, 저정확도 (all-correct 프롬프트 없음) | **0** | **0** | 수학적 필연 (정상) |
-| `rollout_alloc`, 구버전 (v6 이전) | **0** | **0** | H0 설정 버그 (v7에서 수정) |
-| `rollout_alloc`/`subset_select`, 현재 버전, reward > 0 | **비영** | **비영** | 정상 측정값 |
-| `prompt_skip`, 고정확도 (all-correct 프롬프트 존재) | **비영** | **비영** | 정상 측정값 |
+### 4. 구버전 vs 신버전 CSV 분석
 
-### 3. v10 검증 결과
+CSV 컬럼 형식으로 데이터를 분류해 검증했습니다:
 
-`rloo × prompt_skip` 및 `rloo × rollout_alloc` (M=64, B=8, N=8, S=2, K=1, T=2, R=8):
+| CSV 형식 | 파일 수 | budget_bias=0 케이스 (reward>0, budget≠none) | 원인 |
+|---------|:------:|:--:|------|
+| 구버전 (`budget_bias_proj_mean`) | 400개 | **1724건** | rollout_alloc 버그 + prompt_skip 수학적 특성 |
+| 신버전 (`budget_bias_rms`) | 14개 | **16건** | 전부 `prompt_skip` (수학적 필연, 버그 아님) |
 
-| budget | reward_mean | budget_bias_rms | fusion_bias_rms | HL_proxy |
-|--------|:-----------:|:---------------:|:---------------:|:--------:|
-| `prompt_skip` | 0.141 | **0.000** (저정확도 → 수학적 필연) | 0.000 | 0.0134 |
-| `rollout_alloc` | 0.102 | **0.0429 ✓** | **0.0069 ✓** | 0.0738 |
+신버전 16건은 모두 `prompt_skip` 조합 (grpo, stv, rloo, reinforce × prompt_skip)이며, 버그가 아닌 정상 동작입니다.
 
-- `rollout_alloc`: 현재 코드(v7+)에서 budget_bias 비영 확인 ✓
-- `prompt_skip`: 저정확도 조건에서 수학적으로 0이 정상 — 버그 아님 ✓
+### 5. 추가 발견: STV × prompt_skip에서 fusion_bias≠0
+
+`stv × prompt_skip`은 `budget_bias=0`이지만 `fusion_bias≠0 (0.0067)` 임을 발견했습니다.
+
+이유: fusion_bias = delta_H × A_B_r에서, STV 베이스라인의 A_B_r는 프롬프트 간 배치 통계를 반영합니다. 건너뛰는 프롬프트(r=0)라도 STV는 배치 전체 평균을 사용하기 때문에 A_B_r ≠ 0이 될 수 있습니다. 즉, 건너뛰는 프롬프트에서 `delta_H ≠ 0`이고 `A_B_r ≠ 0` → `fusion_bias ≠ 0`. 이는 STV가 프롬프트 간 정보를 공유하는 cross-prompt 추정기이기 때문입니다.
+
+### 6. 실험으로 비영 확인: N=2 조건
+
+N=2로 all-correct 프롬프트가 발생하는 조건에서 prompt_skip budget_bias가 실제로 비영임을 확인했습니다:
+
+| 조건 | budget | reward_mean | budget_bias_rms | fusion_bias_rms |
+|------|--------|:-----------:|:---------------:|:---------------:|
+| N=8, S=2 (표준) | `prompt_skip` | 0.141 | **0.000** (수학적 필연) | 0.000 |
+| N=2, S=16 (검증) | `prompt_skip` | 0.100 | **0.0066 ✓** (비영 확인) | 0.0066 |
+| N=8, S=2 | `rollout_alloc` | 0.102 | **0.0429 ✓** | **0.0069 ✓** |
+| N=8, S=2 | `subset_select` | 0.125 | **0.0699 ✓** | **0.0236 ✓** |
+
+### 7. 완전한 budget_bias=0 케이스 정리
+
+| 조건 | budget_bias | fusion_bias | 성질 |
+|-----|:-----------:|:-----------:|------|
+| budget = `none` | **0** | **0** | 구조적 (모든 조건에서 항상) |
+| budget ≠ `none`, reward = 0 | **0** | **0** | 학습 초기 일시적 |
+| `rollout_alloc` 구버전 (v6 이전) | **0** | **0** | 버그 (v7에서 수정) |
+| `prompt_skip`, 저정확도 (N≥4, 약 11% 정확도) | **0** | **0** | 수학적 필연 (버그 아님) |
+| STV + `prompt_skip`, 저정확도 | **0** | **비영** | STV cross-prompt 특성 |
+| `rollout_alloc`/`subset_select`, reward > 0 | **비영** | **비영** | 정상 측정 |
+| `prompt_skip`, 고정확도 (all-correct 프롬프트 존재) | **비영** | **비영** | 정상 측정 |
 
 ---
 
