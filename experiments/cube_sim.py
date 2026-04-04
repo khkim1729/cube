@@ -419,10 +419,13 @@ def compute_baseline_r(
     return A_B_r
 
 
-def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+SIGMA_ZERO = 1e-12
+
+def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, sigma_zero: float = SIGMA_ZERO) -> torch.Tensor:
     """Build per-rollout normalization scale (diagonal of D_B).
 
     Returns diagonal entries only (M,): 1.0 for no normalization, σ^{-1} for GRPO-style.
+    When σ < sigma_zero (zero-variance prompt), sets d=0 to avoid HL explosion.
     Supports variable N_j when rollouts.N_list is set.
     """
     M = rollouts.M
@@ -434,8 +437,11 @@ def build_D_B(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: flo
         for j in range(B):
             sl = rollouts.prompt_slice(j)
             r_j = rewards[sl]
-            sigma = r_j.std(unbiased=False).clamp(min=eps)
-            d[sl] = 1.0 / sigma
+            sigma = r_j.std(unbiased=False)
+            if float(sigma.item()) < sigma_zero:
+                d[sl] = 0.0  # zero-variance: no learning signal
+            else:
+                d[sl] = 1.0 / sigma
 
     return d  # D_B = diag(d)
 

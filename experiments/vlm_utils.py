@@ -241,17 +241,35 @@ def build_qwen_prompt(item: dict) -> list:
     """Build Qwen2-VL chat messages list for processor.apply_chat_template.
 
     Returns list of message dicts (chat template format).
+    Includes a system prompt to enforce concise answer format for reward parsing.
     """
+    qtype = item.get("type", "math")
+    if qtype == "math":
+        system = (
+            "You are a math problem solver. "
+            "Solve the problem step by step, then write your final answer "
+            "as 'Answer: <number>'."
+        )
+    elif qtype == "mcq":
+        system = (
+            "You are a visual question answering assistant. "
+            "Analyze the image and question, then write your final answer "
+            "as 'Answer: <A/B/C/D>'."
+        )
+    else:
+        system = (
+            "Analyze the question carefully and provide a concise answer. "
+            "Write your final answer as 'Answer: <answer>'."
+        )
+
     content = []
     if item.get("image") is not None:
         content.append({"type": "image", "image": item["image"]})
     content.append({"type": "text", "text": item["question"]})
 
     messages = [
-        {
-            "role": "user",
-            "content": content,
-        }
+        {"role": "system", "content": system},
+        {"role": "user", "content": content},
     ]
     return messages
 
@@ -645,27 +663,46 @@ def compute_vlm_weight_projs(
 ) -> list:
     """Compute R probe projections via n_w weighted backward passes for a VLM.
 
-    Memory-efficient implementation: compute and backward each rollout scalar individually
-    so we never keep the full M-length computation graph in memory.
-    """
-    M = rollouts.M
-    n_w = len(weight_vecs)
+    Memory-efficient: accumulates gradients ONE ROLLOUT AT A TIME via .backward(),
+    so only a single rollout's activation graph (one ViT + one LM forward pass)
+    is in memory at a time.  This avoids OOM for large images (many vision tokens).
 
-    # Get LoRA parameters (trainable only)
+    For each weight vector w_i:
+      ∇_θ [Σ_m w_i[m] log π_m] = Σ_j Σ_{m∈j} w_i[m] ∇_θ log π_m
+      → accumulate via .backward() over M individual rollouts.
+
+    Returns list of n_w tensors, each (R,).
+    """
+    n_w = len(weight_vecs)
     lora_params = [p for p in model.parameters() if p.requires_grad]
 
-    # Initialize projection results for each weight vector
-    results = [torch.zeros(R, device=device) for _ in range(n_w)]
-    per_weight_seeds = [probe_seed + i for i in range(n_w)]
+    results = []
+    for i, w in enumerate(weight_vecs):
+        # Zero stale gradients from previous weight vector
+        for p in lora_params:
+            p.grad = None
 
-    # Build prompt-level tokenized inputs once per item and do per-response forward/backward.
-    flat_idx = 0
-    for j, item in enumerate(rollouts.items):
-        N_j = rollouts.prompt_N(j)
+        # Accumulate: process ONE ROLLOUT at a time → single activation graph
+        for j, item in enumerate(rollouts.items):
+            sl = rollouts.prompt_slice(j)
+            N_j = rollouts.prompt_N(j)
+            offset = sl.start
 
-        messages = build_qwen_prompt(item)
-        text_prompt = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            for k in range(N_j):
+                resp = rollouts.responses[offset + k]
+                log_pi_mk = compute_log_probs_batch(
+                    model, processor,
+                    [item], [resp], N=1, device=device,
+                )  # (1,) with grad — only ONE forward pass in memory
+                loss_mk = w[offset + k].detach() * log_pi_mk[0]
+                loss_mk.backward()
+                del log_pi_mk, loss_mk
+                torch.cuda.empty_cache()
+
+        # Read accumulated gradients → probe projection
+        grads = tuple(
+            p.grad.clone() if p.grad is not None else None
+            for p in lora_params
         )
         proc_out = processor(
             text=[text_prompt],
@@ -730,5 +767,9 @@ def compute_vlm_weight_projs(
 
             flat_idx += 1
             torch.cuda.empty_cache()
+
+    # Clean up
+    for p in lora_params:
+        p.grad = None
 
     return results

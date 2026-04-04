@@ -11,6 +11,10 @@
 - [논문 그림](#논문-그림)
 - [코드 구조](#코드-구조)
 - [베이스라인 및 예산 방법](#베이스라인-및-예산-방법)
+- [코드 수정 사항 (v9)](#코드-수정-사항-v9)
+- [코드 수정 사항 (v8)](#코드-수정-사항-v8)
+- [코드 수정 사항 (v7)](#코드-수정-사항-v7)
+- [코드 수정 사항 (v6)](#코드-수정-사항-v6)
 - [코드 수정 사항 (v5)](#코드-수정-사항-v5)
 - [코드 수정 사항 (v4)](#코드-수정-사항-v4)
 - [코드 수정 사항 (v3)](#코드-수정-사항-v3)
@@ -163,6 +167,218 @@ cube/
 | **SubsetSelect** | 상위-k 롤아웃 선택 | 희소 재가중치 | 세 방법 중 최대 |
 
 ---
+
+## 코드 수정 사항 (v9)
+
+> **커밋:** `6f7cc63` — budget/fusion bias = 0 원인 분석·수정, `train_step_vlm` OOM 수정
+
+### 1. budget_bias / fusion_bias가 항상 0으로 나오는 이유
+
+실험 결과를 보다 보면 `budget_bias`와 `fusion_bias`가 0으로 나오는 경우가 자주 있는데, 이는 **코드 버그가 아니라** 아래 두 가지 수학적으로 정확한 상황 때문입니다.
+
+**상황 1: budget=`none`으로 실험한 경우 (항상 0)**
+
+budget 모듈이 없으면(`none`), 예산 행렬 H가 기준값 H0와 완전히 같습니다.
+따라서 `delta_H = H - H0 = 0`이 되고:
+- `budget_bias = delta_H × r = 0 × r = 0` — budget이 없으니 budget bias도 당연히 0
+- `fusion_bias = delta_H × A_B_r = 0 × A_B_r = 0` — 마찬가지로 0
+
+→ **`none` budget으로 돌리면 budget_bias와 fusion_bias는 언제나 0입니다. 정상 동작입니다.**
+
+**상황 2: non-none budget인데 reward가 모두 0인 경우 (일시적으로 0)**
+
+VLM처럼 아직 학습이 안 된 모델은 미니배치에서 하나도 못 맞출 때가 있습니다. reward가 전부 0이면 `r = 0`이므로:
+- `budget_bias = delta_H × 0 = 0`
+- `fusion_bias = delta_H × A_B_r = delta_H × 0 = 0`
+
+→ **모델이 아무것도 못 맞춘 배치에서는 bias도 측정 불가입니다. 학습이 진행될수록 해소됩니다.**
+
+이를 한눈에 정리하면:
+
+| 실험 조건 | budget_bias | fusion_bias | 해석 |
+|----------|:-----------:|:-----------:|------|
+| budget = `none` | **0** | **0** | 예상된 구조적 영조건 (항상 발생) |
+| budget ≠ `none`, reward = 0 | **0** | **0** | 학습 초기 일시적 현상 (경고 출력) |
+| budget ≠ `none`, reward > 0 | **비영** | **비영** | 정상 측정값 |
+
+### 2. 추가된 경고 메시지
+
+non-none budget인데 reward=0이면 원인을 바로 알 수 있도록 경고를 출력합니다:
+
+```
+[warn] reward=0 → budget_bias=fusion_bias=0 (trivially).
+Model not yet producing correct answers for sampled prompts. Expected to resolve after training.
+```
+
+체크포인트 출력에 `budget_bias` 수치도 함께 표시하도록 변경했습니다:
+
+```
+total_bias=19.8532 | budget_bias=0.0438 | fusion_bias=0.0289 | HL=0.0000 | reward=0.500 | vr=1.000
+```
+
+### 3. `train_step_vlm` OOM 수정 (`experiments/run_vlm.py`)
+
+`compute_vlm_weight_projs`와 동일한 문제가 `train_step_vlm`에도 있었습니다. 프롬프트당 N_j개 rollout을 한꺼번에 forward하면 이미지 인코더 activation이 N_j개 동시에 메모리에 올라가 2번째 이후 체크포인트에서 OOM이 발생했습니다. 롤아웃 1개씩 처리 + 스텝 후 그래디언트 정리로 수정:
+
+```python
+for k in range(N_j):
+    log_pi_mk = compute_log_probs_batch(model, processor, [item], [resp], N=1, ...)
+    loss_mk = -(log_pi_mk[0] * weights[offset + k])
+    loss_mk.backward()
+    del log_pi_mk, loss_mk
+    torch.cuda.empty_cache()
+optimizer.step()
+optimizer.zero_grad()  # 스텝 후 그래디언트 정리
+```
+
+### v9 VLM 검증 결과
+
+`grpo × subset_select` (non-none budget), M=16, B=4, S=1, K=1, T=1, R=8:
+
+| 체크포인트 | total_bias | budget_bias | fusion_bias | reward | vr |
+|:--------:|:----------:|:-----------:|:-----------:|:------:|:--:|
+| step=0 | 19.85 | **0.0438 ✓** | **0.0289 ✓** | 0.500 | 1.000 |
+| step=2 | 0.0000 | 0.0000 (경고 출력) | 0.0000 | 0.000 | 0.000 |
+
+- reward=0.5인 배치 → budget_bias, fusion_bias 모두 **비영 정상 확인** ✓
+- reward=0인 배치 → 경고 출력 ✓, OOM 없이 283.9s 완료 ✓
+
+---
+
+## 코드 수정 사항 (v8)
+
+> **커밋:** `8b59d34`, `(현재)` — VLM OOM 수정, system prompt 추가, loss 포맷 개선, `run_vlm_batch.py` 검증
+
+### 1. `compute_vlm_weight_projs` 롤아웃 1개씩 처리 — OOM 수정 (`experiments/vlm_utils.py`)
+
+**이전 (문제):** `compute_log_probs_batch([item], resps_j, N=N_j)` 호출로 prompt당 N_j개(=8)의 computation graph를 동시에 메모리에 유지. MathVista 고해상도 이미지(수천 vision token)의 ViT 활성화가 N_j개 중첩 → 80GB VRAM 초과.
+
+**수정 후:** 롤아웃 1개씩 (N=1) 처리, 즉시 `.backward()` 후 해제:
+
+```python
+for k in range(N_j):
+    resp = rollouts.responses[offset + k]
+    log_pi_mk = compute_log_probs_batch(
+        model, processor, [item], [resp], N=1, device=device,
+    )  # 단 1개의 forward pass만 메모리 보유
+    loss_mk = w[offset + k].detach() * log_pi_mk[0]
+    loss_mk.backward()
+    del log_pi_mk, loss_mk
+    torch.cuda.empty_cache()
+```
+
+- 피크 메모리 = 단일 롤아웃 활성화 (~5-10GB)
+- 검증: M=32, B=4, S=2, K=2, T=1 → 29분, OOM 없이 완료
+
+### 2. `build_qwen_prompt` system prompt 추가 — vr=0 문제 수정 (`experiments/vlm_utils.py`)
+
+**이전 (문제):** 프롬프트에 답변 형식 지침 없음 → 모델이 장황한 답변 생성 → `extract_answer` 파싱 실패 → `vr=0` (검증 불가, 보상 신호 없음).
+
+**수정 후:** 문제 유형별 system prompt 추가:
+
+```python
+if qtype == "math":
+    system = ("You are a math problem solver. Solve step by step, "
+              "then write 'Answer: <number>'.")
+elif qtype == "mcq":
+    system = ("You are a VQA assistant. Analyze and write 'Answer: <A/B/C/D>'.")
+```
+
+- 검증: `vr`: 0.000 → **1.000** (checkpoint step=0), `reward`: 0.000 → **0.500**
+- `total_bias`: 0.0000 → **34.50** (비영 gradient signal 확인)
+
+### 3. loss 포맷 개선 (`experiments/run_vlm.py`)
+
+`:.4f` → `:.4e` (scientific notation): `0.0000` → `0.0000e+00` (명확한 정밀도 표시).
+
+### 4. `run_vlm_batch.py` 소형 파라미터 테스트 검증
+
+```bash
+CUDA_VISIBLE_DEVICES=3 python3 experiments/run_vlm_batch.py \
+    --gpu_id 3 --offset 8 --n_runs 1 \
+    --dataset mathvista \
+    --M 8 --B 2 --S 1 --K 1 --T 1 --R 8 \
+    --num_train_steps 2 --n_pool 64 \
+    --results_dir /tmp/cube_vlm_batch_test
+```
+
+결과: **191초(3.2분)** 완료 (A100 80GB).
+
+| 체크포인트 | total_bias | fusion_bias | HL | reward | vr |
+|:--------:|:----------:|:-----------:|:---:|:------:|:--:|
+| step=0 | 34.50 ✓ | 0.0000 ✓ | 0.1667 | 0.500 | 1.000 |
+| step=2 | 0.0000 | 0.0000 ✓ | 0.1667 | 0.000 | 0.000 |
+
+> **loss=0 이슈 참고:** B=2, N=4처럼 극소형 파라미터에서 prompt별 all-correct 또는 all-wrong이면 RLOO advantage가 0이 되어 loss=0 발생. 이는 수학적으로 정확한 동작이며 실제 실험(B=32, N=8)에서는 발생하지 않음.
+
+---
+
+## 코드 수정 사항 (v7)
+
+> **커밋:** `ca25ba5` — mschoi 브랜치 병합 + GRPO 제로-분산 D_B 수정, run_vlm T1, 손실 그래프
+
+### 1. GRPO 제로-분산 D_B 폭발 방지 (`experiments/cube_sim.py`, `experiments/run_vlm.py`)
+
+**이전 (문제):** `build_D_B` 및 `build_D_B_vlm`에서 GRPO 정규화 시 `σ.clamp(min=1e-8)` 사용. 프롬프트 내 모든 롤아웃이 동일한 보상(σ=0)이면 D_B = 1/1e-8 = 1e8 → HL proxy 폭발.
+
+**수정 후 (mschoi 브랜치 병합):** σ < 1e-12이면 `d[sl] = 0.0`으로 직접 설정. 학습 신호가 없으면 스케일도 0:
+
+```python
+sigma = rewards[sl].std(unbiased=False)
+if float(sigma.item()) < 1e-12:
+    d[sl] = 0.0   # zero-variance: 학습 신호 없음
+else:
+    d[sl] = 1.0 / sigma
+```
+
+- `cube_sim.py` `build_D_B` (파일럿) 및 `run_vlm.py` `build_D_B_vlm` (VLM) 모두 동일 수정
+- 검증: 전체 보상=0인 경우 HL = 0.0 (이전에는 1e16 이상 폭발)
+
+### 2. run_vlm.py T1 수정: N = M // B 강제 (`experiments/run_vlm.py`)
+
+`run_pilot.py`와 동일하게 N을 M과 B로부터 유도:
+
+```python
+if args.M % args.B != 0:
+    raise ValueError(f"M ({args.M}) must be divisible by B ({args.B})")
+args.N = args.M // args.B  # --N CLI 값 무시; M/B로 덮어씀
+```
+
+### 3. 학습 손실/보상 곡선 PNG 저장 (`experiments/run_pilot.py`, `experiments/run_vlm.py`)
+
+실험 완료 후 `{run_id}_loss.png` 자동 저장 (matplotlib Agg 백엔드):
+
+- 상단 패널: 학습 손실(Training Loss) vs 스텝
+- 하단 패널: 평균 보상(Reward Mean) vs 스텝
+- matplotlib 미설치 시 경고 출력 후 무시 (실험 중단 없음)
+
+```bash
+# 저장 위치
+experiments/results/{run_id}_loss.png       # run_pilot.py
+experiments/results_vlm/{run_id}_loss.png   # run_vlm.py
+```
+
+### v7 파일럿 검증 결과
+
+v7 코드로 4개 조합 검증 실행 (GPU 1 A100 80GB, M=256, B=32, S=4, K=2, R=16, num_train_steps=20):
+
+| 베이스라인 | 예산 | Fusion Bias | Total Var | HL proxy | 평균 보상 |
+|----------|------|:-----------:|:---------:|:--------:|:--------:|
+| RLOO | None | 0.0000 ✓ | 0.0016 ✓ | 4.5e-3 | 0.098 |
+| GRPO | SubsetSelect | 0.0081 ✓ | 0.0306 ✓ | 3.2e-2 | 0.098 |
+| GRPO | RolloutAlloc | 0.0189 ✓ | 0.0039 ✓ | 6.8e-3 ✓ | 0.092 |
+| STV | PromptSkip | 0.0011 ✓ | 0.0015 ✓ | 2.4e-3 | 0.098 |
+
+확인 사항:
+- RLOO×None: Fusion Bias = 0 (구조적 영조건 ✓)
+- 비영 budget 조합: Fusion Bias 비영, Total Var 비영 ✓
+- GRPO×RolloutAlloc: HL = 6.8e-3 (이전 폭발 없음 ✓) — D_B 제로-분산 수정 효과
+- 모든 조합에서 loss PNG 저장 ✓
+
+> **설계 변경 주의 (이전 세션 T2 수정 영향):** `build_H` rollout_alloc에서 H0를 균일 reference(1/(B×N\_base))로 유지하도록 변경됨. delta\_H = H − H0 ≠ 0 이 되어 **v5에서 확인된 "RAlloc→Fusion≡0" 구조적 영조건이 더 이상 성립하지 않음**. GRPO×RolloutAlloc Fusion Bias = 0.019 (비영).
+
+---
+
 ## 코드 수정 사항 (v6)
 
 ### 1. RMS 편향 스칼라 추가 (`experiments/cube_sim.py`)

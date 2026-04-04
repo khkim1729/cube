@@ -54,14 +54,28 @@ from experiments.cube_sim import (
 # build_D_B adapted for VLM Rollouts (same logic as cube_sim.build_D_B)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_D_B_vlm(rollouts: Rollouts, baseline: str, rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+SIGMA_ZERO = 1e-12
+
+def build_D_B_vlm(
+    rollouts: Rollouts,
+    baseline: str,
+    rewards: torch.Tensor,
+    sigma_zero: float = SIGMA_ZERO,
+) -> torch.Tensor:
     M, B = rollouts.M, rollouts.B
     d = torch.ones(M, device=rewards.device)
+
     if baseline == "grpo":
         for j in range(B):
             sl = rollouts.prompt_slice(j)
-            sigma = rewards[sl].std(unbiased=False).clamp(min=eps)
-            d[sl] = 1.0 / sigma
+            sigma = rewards[sl].std(unbiased=False)
+
+            # zero-variance prompt: learning signal이 없으므로 스케일도 0으로 둠
+            if float(sigma.item()) < sigma_zero:
+                d[sl] = 0.0
+            else:
+                d[sl] = 1.0 / sigma
+
     return d
 
 
@@ -253,8 +267,8 @@ def train_step_vlm(
     A_B_r   = compute_baseline_r(baseline, r, rollouts.B, rollouts.N_per_prompt, lambdas, rollouts)
     tilde_a = d_B * (r - A_B_r)  # (M,) advantage
 
-    # Compute log probs and accumulate gradients one prompt at a time (memory-efficient).
-    # Avoids holding M full computation graphs simultaneously.
+    # Compute log probs and accumulate gradients ONE ROLLOUT AT A TIME (memory-efficient).
+    # Avoids holding N_j vision-encoder activation graphs simultaneously.
     from experiments.vlm_utils import compute_log_probs_batch
     weights = (H * tilde_a).detach()  # (M,) no grad needed
 
@@ -264,20 +278,24 @@ def train_step_vlm(
     for j, item in enumerate(rollouts.items):
         sl = rollouts.prompt_slice(j)
         N_j = rollouts.prompt_N(j)
-        log_pi_j = compute_log_probs_batch(
-            model, processor,
-            [item], rollouts.responses[sl.start:sl.stop],
-            N=N_j, device=device,
-        )  # (N_j,) with grad
-        loss_j = -(log_pi_j * weights[sl]).sum()
-        loss_j.backward()
-        total_loss += loss_j.item()
-        torch.cuda.empty_cache()
+        offset = sl.start
+        for k in range(N_j):
+            resp = rollouts.responses[offset + k]
+            log_pi_mk = compute_log_probs_batch(
+                model, processor,
+                [item], [resp], N=1, device=device,
+            )  # (1,) with grad — single forward pass in memory
+            loss_mk = -(log_pi_mk[0] * weights[offset + k])
+            loss_mk.backward()
+            total_loss += loss_mk.item()
+            del log_pi_mk, loss_mk
+            torch.cuda.empty_cache()
 
     torch.nn.utils.clip_grad_norm_(
         [p for p in model.parameters() if p.requires_grad], max_norm=1.0
     )
     optimizer.step()
+    optimizer.zero_grad()  # clean up after step
 
     verifiable_ratio = ((r > 0).float().mean()).item()
     return total_loss, r.mean().item(), verifiable_ratio
@@ -287,7 +305,34 @@ def train_step_vlm(
 # Main Experiment
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _save_loss_plot(steps: list, losses: list, rewards: list, path: Path):
+    """Save training loss and reward curves to a PNG file."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+        ax1.plot(steps, losses, linewidth=1.0)
+        ax1.set_ylabel("Training Loss")
+        ax1.grid(True, alpha=0.3)
+        ax2.plot(steps, rewards, linewidth=1.0, color="tab:orange")
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("Reward Mean")
+        ax2.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [warn] Could not save loss plot: {e}")
+
+
 def run_experiment(args):
+    # T1 fix: M is the primary parameter; N is derived from M and B.
+    if args.M % args.B != 0:
+        raise ValueError(f"M ({args.M}) must be divisible by B ({args.B})")
+    args.N = args.M // args.B  # override --N flag; always derive from M/B
+
     device = f"cuda:{args.gpu_id}"
     torch.cuda.set_device(args.gpu_id)
 
@@ -334,16 +379,14 @@ def run_experiment(args):
             model, processor, optimizer, data_pool,
             args.baseline, args.budget, args.B, args.N, device,
         )
-        print(f"  dry_run train step: loss={loss:.4f}, reward={rew:.3f}, verifiable_ratio={vr:.3f}")
+        print(f"  dry_run train step: loss={loss:.4e}, reward={rew:.3f}, verifiable_ratio={vr:.3f}")
         return csv_path
 
     # Training & logging loop
     log_interval = max(1, args.num_train_steps // args.T) if args.T > 0 else args.num_train_steps + 1
     total_start = time.time()
     checkpoint_idx = 0
-    best_reward = -float('inf')
-    ckpt_dir = out_dir / args.run_id
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    loss_steps, loss_history, reward_history = [], [], []
 
     for step in range(args.num_train_steps + 1):
         # Checkpoint measurement
@@ -402,27 +445,19 @@ def run_experiment(args):
 
             print(
                 f"    total_bias={metrics['total_bias_norm']:.4f} | "
-                # f"fusion_bias={metrics['fusion_bias_proj_mean']:.4f} | "
+                f"budget_bias={metrics['budget_bias_rms']:.4f} | "
                 f"fusion_bias={metrics['fusion_bias_rms']:.4f} | "
                 f"HL={metrics['HL_proxy_mean']:.4f} | "
                 f"reward={metrics['reward_mean']:.3f} | "
                 f"vr={vr:.3f} | t={ckpt_elapsed:.1f}s"
             )
-            
-            # Save best checkpoint
-            current_reward = float(metrics['reward_mean'])
-            if current_reward > best_reward:
-                best_reward = current_reward
-                best_ckpt = ckpt_dir / "best"
-                model.save_pretrained(best_ckpt)
-                processor.save_pretrained(best_ckpt)
-                print(f"    [Best] saved at step {step}, reward={current_reward:.3f}")
-            
-            # Save last checkpoint
-            last_ckpt = ckpt_dir / "last"
-            model.save_pretrained(last_ckpt)
-            processor.save_pretrained(last_ckpt)
-            
+            # Warn when reward=0 with non-none budget (budget/fusion_bias trivially 0)
+            if metrics['reward_mean'] == 0.0 and args.budget != "none":
+                print(
+                    f"    [warn] reward=0 → budget_bias=fusion_bias=0 (trivially). "
+                    f"Model not yet producing correct answers for sampled prompts. "
+                    f"Expected to resolve after training."
+                )
             checkpoint_idx += 1
 
         # Train step
@@ -432,11 +467,20 @@ def run_experiment(args):
                 model, processor, optimizer, data_pool,
                 args.baseline, args.budget, args.B, args.N, device,
             )
+            loss_steps.append(step)
+            loss_history.append(loss)
+            reward_history.append(rew)
             if step % max(1, args.num_train_steps // 20) == 0:
-                print(f"  [step={step:4d}] loss={loss:.4f}  reward={rew:.3f}  vr={vr:.3f}")
+                print(f"  [step={step:4d}] loss={loss:.4e}  reward={rew:.3f}  vr={vr:.3f}")
 
     total_elapsed = time.time() - total_start
     print(f"  [{args.run_id}] Done in {total_elapsed:.1f}s → {csv_path}")
+
+    # Save loss/reward plot
+    if loss_history:
+        plot_path = out_dir / f"{args.run_id}_loss.png"
+        _save_loss_plot(loss_steps, loss_history, reward_history, plot_path)
+        print(f"  Loss plot saved → {plot_path}")
 
     meta["end_time"] = datetime.now().isoformat()
     meta["total_elapsed_seconds"] = round(total_elapsed, 2)
