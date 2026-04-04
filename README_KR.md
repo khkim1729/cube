@@ -170,20 +170,59 @@ cube/
 
 ## 코드 수정 사항 (v9)
 
-> **커밋:** `(현재)` — budget/fusion bias = 0 원인 분석·수정, `train_step_vlm` OOM 수정
+> **커밋:** `6f7cc63` — budget/fusion bias = 0 원인 분석·수정, `train_step_vlm` OOM 수정
 
-### 1. `train_step_vlm` 롤아웃 1개씩 처리 + 그래디언트 정리 (`experiments/run_vlm.py`)
+### 1. budget_bias / fusion_bias가 항상 0으로 나오는 이유
 
-**이전 (문제):** `compute_log_probs_batch([item], resps_j, N=N_j)` — 프롬프트당 N_j개 activation graph 동시 유지 → 학습 스텝에서도 OOM 발생 (특히 2번째 이후 체크포인트에서).
+실험 결과를 보다 보면 `budget_bias`와 `fusion_bias`가 0으로 나오는 경우가 자주 있는데, 이는 **코드 버그가 아니라** 아래 두 가지 수학적으로 정확한 상황 때문입니다.
 
-**수정 후:** 롤아웃 1개씩 처리 + `optimizer.zero_grad()` after step:
+**상황 1: budget=`none`으로 실험한 경우 (항상 0)**
+
+budget 모듈이 없으면(`none`), 예산 행렬 H가 기준값 H0와 완전히 같습니다.
+따라서 `delta_H = H - H0 = 0`이 되고:
+- `budget_bias = delta_H × r = 0 × r = 0` — budget이 없으니 budget bias도 당연히 0
+- `fusion_bias = delta_H × A_B_r = 0 × A_B_r = 0` — 마찬가지로 0
+
+→ **`none` budget으로 돌리면 budget_bias와 fusion_bias는 언제나 0입니다. 정상 동작입니다.**
+
+**상황 2: non-none budget인데 reward가 모두 0인 경우 (일시적으로 0)**
+
+VLM처럼 아직 학습이 안 된 모델은 미니배치에서 하나도 못 맞출 때가 있습니다. reward가 전부 0이면 `r = 0`이므로:
+- `budget_bias = delta_H × 0 = 0`
+- `fusion_bias = delta_H × A_B_r = delta_H × 0 = 0`
+
+→ **모델이 아무것도 못 맞춘 배치에서는 bias도 측정 불가입니다. 학습이 진행될수록 해소됩니다.**
+
+이를 한눈에 정리하면:
+
+| 실험 조건 | budget_bias | fusion_bias | 해석 |
+|----------|:-----------:|:-----------:|------|
+| budget = `none` | **0** | **0** | 예상된 구조적 영조건 (항상 발생) |
+| budget ≠ `none`, reward = 0 | **0** | **0** | 학습 초기 일시적 현상 (경고 출력) |
+| budget ≠ `none`, reward > 0 | **비영** | **비영** | 정상 측정값 |
+
+### 2. 추가된 경고 메시지
+
+non-none budget인데 reward=0이면 원인을 바로 알 수 있도록 경고를 출력합니다:
+
+```
+[warn] reward=0 → budget_bias=fusion_bias=0 (trivially).
+Model not yet producing correct answers for sampled prompts. Expected to resolve after training.
+```
+
+체크포인트 출력에 `budget_bias` 수치도 함께 표시하도록 변경했습니다:
+
+```
+total_bias=19.8532 | budget_bias=0.0438 | fusion_bias=0.0289 | HL=0.0000 | reward=0.500 | vr=1.000
+```
+
+### 3. `train_step_vlm` OOM 수정 (`experiments/run_vlm.py`)
+
+`compute_vlm_weight_projs`와 동일한 문제가 `train_step_vlm`에도 있었습니다. 프롬프트당 N_j개 rollout을 한꺼번에 forward하면 이미지 인코더 activation이 N_j개 동시에 메모리에 올라가 2번째 이후 체크포인트에서 OOM이 발생했습니다. 롤아웃 1개씩 처리 + 스텝 후 그래디언트 정리로 수정:
 
 ```python
 for k in range(N_j):
-    resp = rollouts.responses[offset + k]
-    log_pi_mk = compute_log_probs_batch(
-        model, processor, [item], [resp], N=1, device=device,
-    )  # 단 1개 forward pass
+    log_pi_mk = compute_log_probs_batch(model, processor, [item], [resp], N=1, ...)
     loss_mk = -(log_pi_mk[0] * weights[offset + k])
     loss_mk.backward()
     del log_pi_mk, loss_mk
@@ -192,44 +231,17 @@ optimizer.step()
 optimizer.zero_grad()  # 스텝 후 그래디언트 정리
 ```
 
-### 2. budget_bias / fusion_bias = 0 원인 분석 및 경고 출력
-
-**원인 분석:** budget_bias와 fusion_bias가 0이 되는 경우는 두 가지:
-
-| 상황 | budget_bias | fusion_bias | 정상 여부 |
-|------|:-----------:|:-----------:|:---------:|
-| budget=`none` | **0** (구조적) | **0** (구조적) | ✓ 항상 정확 |
-| budget≠`none` AND r=0 (reward 전체 0) | **0** | **0** | ✓ 수학적으로 맞음, 단 학습 신호 없음 |
-| budget≠`none` AND r≠0 | **비영** | **비영** | ✓ 정상 |
-
-- `none` budget: `delta_H = H - H0 = 0` → `w2 = delta_H × r = 0`, `w4 = delta_H × A_B_r = 0` → 구조적 영조건
-- reward=0: `r = 0` → `w2 = 0`, `w4 = 0` → 학습 신호 없음 (VLM 미학습 시 발생 가능)
-
-**수정:** reward=0 + non-none budget일 때 경고 출력:
-```
-[warn] reward=0 → budget_bias=fusion_bias=0 (trivially).
-Model not yet producing correct answers for sampled prompts. Expected to resolve after training.
-```
-
-**수정:** 체크포인트 출력에 `budget_bias` 항목 추가:
-```
-total_bias=19.8532 | budget_bias=0.0438 | fusion_bias=0.0289 | HL=0.0000 | reward=0.500 | vr=1.000
-```
-
 ### v9 VLM 검증 결과
 
-`grpo × subset_select`, M=16, B=4, S=1, K=1, T=1, R=8 (GPU 2 A100 80GB):
+`grpo × subset_select` (non-none budget), M=16, B=4, S=1, K=1, T=1, R=8:
 
-| 체크포인트 | total_bias | budget_bias | fusion_bias | HL | reward | vr |
-|:--------:|:----------:|:-----------:|:-----------:|:---:|:------:|:--:|
-| step=0 | **19.85** | **0.0438 ✓** | **0.0289 ✓** | 0.0000 | 0.500 | 1.000 |
-| step=2 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.000 | 0.000 |
+| 체크포인트 | total_bias | budget_bias | fusion_bias | reward | vr |
+|:--------:|:----------:|:-----------:|:-----------:|:------:|:--:|
+| step=0 | 19.85 | **0.0438 ✓** | **0.0289 ✓** | 0.500 | 1.000 |
+| step=2 | 0.0000 | 0.0000 (경고 출력) | 0.0000 | 0.000 | 0.000 |
 
-- step=0: reward=0.5 → budget_bias=0.044, fusion_bias=0.029 **비영 확인** ✓
-- step=2: reward=0 (운 나쁜 배치) → 경고 출력 ✓
-- OOM 없이 283.9s 완료 (기존 `train_step_vlm` OOM 수정 효과)
-
-> **실제 실험(B=32, N=8)에서는** 충분히 많은 프롬프트를 포함해 reward≠0이 안정적으로 보장됨.
+- reward=0.5인 배치 → budget_bias, fusion_bias 모두 **비영 정상 확인** ✓
+- reward=0인 배치 → 경고 출력 ✓, OOM 없이 283.9s 완료 ✓
 
 ---
 
