@@ -61,7 +61,7 @@ class Rollouts:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
-    """Load a Qwen2-VL model with LoRA adapter.
+    """Load Qwen2-VL-7B-Instruct with LoRA adapter.
 
     Returns:
         model     : PeftModel with LoRA, in bf16
@@ -70,21 +70,15 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
     from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
     from peft import LoraConfig, get_peft_model, TaskType
 
-    model_id = "Qwen/Qwen2-VL-2B-Instruct"
+    model_id = "Qwen/Qwen2-VL-7B-Instruct"
     print(f"  Loading {model_id} ...")
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_id,
-        dtype=torch.float16,
+        dtype=torch.bfloat16,
         device_map=device,
         trust_remote_code=True,
     )
-    # processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        min_pixels=256 * 28 * 28,
-        max_pixels=256 * 28 * 28,   # Colab 기준 변경
-    )
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
 
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -704,69 +698,8 @@ def compute_vlm_weight_projs(
             p.grad.clone() if p.grad is not None else None
             for p in lora_params
         )
-        proc_out = processor(
-            text=[text_prompt],
-            images=[item.get("image")] if item.get("image") else None,
-            return_tensors="pt",
-        ).to(device)
-
-        prompt_ids = proc_out.input_ids  # (1, L_prompt)
-        L_p = prompt_ids.shape[1]
-
-        for k in range(N_j):
-            resp = rollouts.responses[flat_idx]
-            resp_ids = processor.tokenizer(
-                resp, return_tensors="pt", add_special_tokens=False
-            ).input_ids.to(device)
-            full_ids = torch.cat([prompt_ids, resp_ids], dim=1)
-
-            model_kwargs = {"input_ids": full_ids}
-            if "attention_mask" in proc_out:
-                extra_mask = torch.ones(
-                    (1, resp_ids.shape[1]), device=device,
-                    dtype=proc_out.attention_mask.dtype
-                )
-                model_kwargs["attention_mask"] = torch.cat(
-                    [proc_out.attention_mask, extra_mask], dim=1
-                )
-            if "pixel_values" in proc_out:
-                model_kwargs["pixel_values"] = proc_out.pixel_values
-            if "image_grid_thw" in proc_out:
-                model_kwargs["image_grid_thw"] = proc_out.image_grid_thw
-            if "mm_token_type_ids" in proc_out:
-                extra_type = torch.zeros(
-                    (1, resp_ids.shape[1]), device=device,
-                    dtype=proc_out.mm_token_type_ids.dtype
-                )
-                model_kwargs["mm_token_type_ids"] = torch.cat(
-                    [proc_out.mm_token_type_ids, extra_type], dim=1
-                )
-
-            out = model(**model_kwargs)
-            logits = out.logits[0]
-            shift_logits = logits[L_p - 1:-1]
-            shift_labels = resp_ids[0]
-            log_probs = torch.log_softmax(shift_logits, dim=-1)
-            log_pi = log_probs[
-                torch.arange(len(shift_labels), device=device), shift_labels
-            ].sum()
-
-            grads = torch.autograd.grad(
-                log_pi, lora_params,
-                retain_graph=False,
-                create_graph=False,
-                allow_unused=True,
-            )
-
-            for i in range(n_w):
-                w_val = float(weight_vecs[i][flat_idx].detach().item())
-                if w_val == 0.0:
-                    continue
-                proj = probe_project_grads(grads, R, seed=per_weight_seeds[i], device=device)
-                results[i] += w_val * proj
-
-            flat_idx += 1
-            torch.cuda.empty_cache()
+        proj = probe_project_grads(grads, R, seed=probe_seed, device=device)
+        results.append(proj)
 
     # Clean up
     for p in lora_params:
