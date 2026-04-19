@@ -61,7 +61,7 @@ class Rollouts:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
-    """Load Qwen2-VL-7B-Instruct with LoRA adapter.
+    """Load Qwen2-VL-2B-Instruct with LoRA adapter.
 
     Returns:
         model     : PeftModel with LoRA, in bf16
@@ -70,7 +70,7 @@ def load_qwen_model(lora_rank: int = 16, device: str = "cuda"):
     from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
     from peft import LoraConfig, get_peft_model, TaskType
 
-    model_id = "Qwen/Qwen2-VL-7B-Instruct"
+    model_id = "Qwen/Qwen2-VL-2B-Instruct"
     print(f"  Loading {model_id} ...")
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_id,
