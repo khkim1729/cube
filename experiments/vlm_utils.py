@@ -1,5 +1,5 @@
 """
-VLM Utilities for CUBE experiments (Qwen2-VL-7B-Instruct).
+VLM Utilities for CUBE experiments (Qwen2-VL-2B-Instruct).
 
 Provides:
   - load_qwen_model(lora_rank, device) → (model, processor)
